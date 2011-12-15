@@ -133,8 +133,8 @@
             (vector-future-refcount two)
             (status two))
     (sleep 1)
-    (format t "rc: ~A~%" (vector-future-refcount two))
     (wait three :done)
     (wait four :done)
+    (format t "rc: ~A~%" (vector-future-refcount two))
     (values src one two three four)))
 ||#
