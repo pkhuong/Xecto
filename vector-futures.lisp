@@ -4,20 +4,15 @@
            "RETAIN"
            "RELEASE"
            "MAKE"
-           "WAIT"
-           "DATA"
-           "STATUS"))
+           "DATA"))
 
 (in-package "VECTOR-FUTURE")
 
 (defstruct (vector-future
-            (:constructor %make-future-data (size
-                                             &optional (refcount 1)
-                                             &aux %parallel-future)))
+            (:include parallel-future:future))
   (refcount 0 :type word)
   (size     0 :type (and unsigned-byte fixnum))
-  (data   nil :type (or null (simple-array double-float 1)))
-  (%parallel-future nil :type parallel-future:future))
+  (data   nil :type (or null (simple-array double-float 1))))
 
 (defun data (vector-future)
   (declare (type vector-future vector-future))
@@ -33,9 +28,6 @@
   (when (= 1 (atomic-decf (vector-future-refcount future)))
     (setf (vector-future-data future) nil))
   nil)
-
-(defun vector-future-parallel-future (vector-future)
-  (vector-future-%parallel-future vector-future))
 
 (defun make-allocator (allocation)
   ;; finalize this
@@ -74,30 +66,18 @@
 
 (defun make (allocation dependencies &rest tasks)
   (declare (dynamic-extent tasks))
-  (let* ((size   (if (vector-future-p allocation)
-                     (vector-future-size allocation)
-                     allocation))
-         (future (%make-future-data size)))
-    (setf (vector-future-%parallel-future future)
-          (parallel-future:make
-           (mapcar #'vector-future-parallel-future
-                   (if (vector-future-p allocation)
-                       (adjoin allocation dependencies)
-                       dependencies))
-           (make-allocator allocation)
-           tasks
-           (make-deallocator dependencies)
-           future))
-    future))
-
-(defun wait (future &rest status)
-  (declare (dynamic-extent status))
-  (apply 'future:wait
-         (vector-future-parallel-future future)
-         status))
-
-(defun status (future)
-  (future:status (vector-future-parallel-future future)))
+  (let ((size (if (vector-future-p allocation)
+                  (vector-future-size allocation)
+                  allocation)))
+    (parallel-future:make (if (vector-future-p allocation)
+                              (adjoin allocation dependencies)
+                              dependencies)
+                          (make-allocator allocation)
+                          tasks
+                          (make-deallocator dependencies)
+                          #'make-vector-future
+                          :size     size
+                          :refcount 1)))
 
 #||
 ;; demo

@@ -1,7 +1,7 @@
 (defpackage "PARALLEL-FUTURE"
   (:use "CL" "SB-EXT")
   (:export "*CONTEXT*" "WITH-CONTEXT"
-           "FUTURE"
+           "FUTURE" "P"
            "MAKE"))
 
 (in-package "PARALLEL-FUTURE")
@@ -16,7 +16,6 @@
             (:constructor
                 %make-future (fun dependencies
                               before units after
-                              data
                               &aux (left-count (length units))))
             (:include future:future))
   (context *context* :type wq:queue      :read-only t)
@@ -24,12 +23,15 @@
   (before        nil :type function      :read-only t)
   (units         nil :type simple-vector :read-only t)
   (left-count      0 :type word)
-  (after         nil :type function      :read-only t)
-  (data          nil :read-only t))
+  (after         nil :type function      :read-only t))
+
+(declaim (inline p))
+(defun p (x)
+  (future-p x))
 
 (defun %future-fun (future)
   (declare (type future future))
-  (funcall (future-before future) (future-data future))
+  (funcall (future-before future) future)
   (if (zerop (length (future-units future)))
       (close-future future)
       (wq:push-self-all (future-context future)
@@ -37,7 +39,7 @@
   nil)
 
 (defun close-future (future)
-  (funcall (future-after future) (future-data future))
+  (funcall (future-after future) future)
   (future:mark-done future))
 
 (defstruct (task
@@ -49,7 +51,7 @@
 (defun %task-fun (task)
   (declare (type task task))
   (let ((future (task-parent task)))
-    (funcall (task-task task) (future-data future))
+    (funcall (task-task task) future)
     (when (= 1 (atomic-decf (future-left-count future)))
       (close-future future)))
   nil)
@@ -66,16 +68,24 @@
             during)
   future)
 
-(defun make (dependencies before during after &optional data)
+(defun make (dependencies before during after &optional constructor &rest arguments)
   (let* ((dependencies (make-array (length dependencies)
                                    :initial-contents dependencies))
          (units        (make-array (length during)))
-         (future       (%make-future #'%future-fun
-                                     dependencies
-                                     before
-                                     units
-                                     after
-                                     data)))
+         (future       (if constructor
+                           (apply constructor
+                                  :fun          #'%future-fun
+                                  :dependencies dependencies
+                                  :before       before
+                                  :units        units
+                                  :left-count   (length units)
+                                  :after        after
+                                  arguments)
+                           (%make-future #'%future-fun
+                                         dependencies
+                                         before
+                                         units
+                                         after))))
     (wrap-units future during)
     (future:mark-dependencies future dependencies)
     future))

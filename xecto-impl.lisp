@@ -3,11 +3,14 @@
 (load "/Users/pkhuong/xecto/futures.lisp")
 (load "/Users/pkhuong/xecto/parallel-futures.lisp")
 (load "/Users/pkhuong/xecto/vector-futures.lisp")
+(load "/Users/pkhuong/xecto/loop-nest-transpose.lisp")
 
 (defpackage "XECTO-IMPL"
   (:use "CL" "SB-EXT" "SB-THREAD"))
 
 (in-package "XECTO-IMPL")
+
+;; shape representation
 
 (deftype index ()
   '(and unsigned-byte fixnum))
@@ -16,7 +19,7 @@
   `(simple-array (cons index fixnum)
                  (,rank)))
 
-(defglobal **shape-table-lock** (make-mutex :name "**SHAPE-TABLE-LOCK**"))
+(defglobal **shape-table-lock** (make-mutex :name "SHAPE TABLE LOCK"))
 (defglobal **shape-table** (make-hash-table :test #'equalp
                                             :weakness :key-and-value))
 
@@ -81,7 +84,7 @@
           do (assert (typep dim 'index))
              (setf (aref canon (- len i)) (cons dim stride)
                    stride                 (* stride dim)))
-    (values stride canon)))
+    (values stride (intern-shape canon))))
 
 (defun make-xecto (dimensions &key initial-element)
   (multiple-value-bind (size shape)
@@ -89,12 +92,12 @@
     (let ((xecto (%make-xecto shape (vector-future:make size '()))))
       (set-finalizer xecto)
       (when initial-element
-        (vector-future:wait (xecto-data xecto) :done)
+        (future:wait (xecto-data xecto) :done)
         (fill (vector-future:data (xecto-data xecto)) (float initial-element 1d0)))
       xecto)))
 
 (defun wait (xecto &rest condition)
-  (values xecto (apply 'vector-future:wait (xecto-data xecto) condition)))
+  (values xecto (apply 'future:wait (xecto-data xecto) condition)))
 
 (defun copy-xecto (xecto &key shape offset)
   (let ((new (%make-xecto (or shape
@@ -193,7 +196,7 @@
                 shapes)
       (apply 'execute-map
              fun r-size r-shape
-             (apply 'optimize-pattern
+             (apply 'xecto-loop-nest:optimize
                     (cons 0 r-shape)
                     (mapcar (lambda (xecto shape)
                               (cons (xecto-offset xecto) shape))
@@ -248,16 +251,27 @@
                  arguments))
   (let ((data    (make-array (1+ (length arguments))))
         (offsets (copy-seq offsets)))
+    (declare (type (simple-array (simple-array double-float 1) 1) data))
     (setf (aref data 0) (vector-future:data destination))
     (loop for i from 1 below (length data) do
       (setf (aref data i) (vector-future:data (aref arguments (1- i)))))
     (destructuring-bind (repeat . strides) loop
-      (loop for i below repeat do
+      (if (eql function #'+)
+          (loop for i below repeat do
+            (setf (aref (aref data 0) (aref offsets 0))
+                  (let ((acc 0d0))
+                    (declare (optimize speed))
+                    (declare (double-float acc))
+                    (loop for j from 1 below (length data)
+                          do (incf acc (aref (aref data j) (aref offsets j))))
+                    acc))
+            (map-into offsets #'+ offsets strides))
+          (loop for i below repeat do
             (setf (aref (aref data 0) (aref offsets 0))
                   (apply function
                          (loop for j from 1 below (length data)
                                collect (aref (aref data j) (aref offsets j)))))
-            (map-into offsets #'+ offsets strides)))))
+            (map-into offsets #'+ offsets strides))))))
 
 (defun execute-map (fun r-size r-shape
                     pattern
@@ -268,83 +282,3 @@
                       (mapcar #'xecto-data args)
                       tasks)))
     (%make-xecto r-shape data)))
-
-(defun shapes-compatible-p (shapes)
-  (let ((shape (aref shapes 0)))
-    (loop for i from 1 below (length shapes)
-          for other = (aref shapes i)
-          always (every (lambda (x y)
-                          (= (car x) (car y)))
-                        shape other))))
-
-(defun lex-compare (x y)
-  (map nil (lambda (x y)
-             (let ((x (abs x))
-                   (y (abs y)))
-               (cond ((< x y) (return-from lex-compare -1))
-                     ((> x y) (return-from lex-compare  1)))))
-       x y)
-  0)
-
-(defun merge-shapes (offsets shapes)
-  (declare (type (simple-array index 1) offsets)
-           (type simple-vector shapes))
-  (assert (shapes-compatible-p shapes))
-  (let* ((dimensions (map 'simple-vector #'car (aref shapes 0)))
-         (pattern    (make-array (length dimensions)))
-         (n          (length shapes)))
-    (dotimes (i (length dimensions) pattern)
-      (let ((strides (make-array n :element-type 'fixnum))
-            (count   (aref dimensions i)))
-        (dotimes (j n)
-          (setf (aref strides j)
-                (cdr (aref (aref shapes j) i))))
-        (let ((nz (find 0 strides :test-not 'eql)))
-          (when (and nz
-                     (minusp nz))
-            (map-into offsets (lambda (stride offset)
-                                (+ offset (* stride count)))
-                      strides offsets)
-            (map-into strides #'- strides)))
-        (setf (aref pattern i) (cons count strides))))))
-
-(defun merge-pattern-1 (pattern)
-  (declare (type simple-vector pattern))
-  (let ((len (length pattern)))
-    (loop
-      for i from (1- len) downto 0
-      for (i-count . i-strides) = (aref pattern i)
-      do (loop
-           for j from (1- i) downto 0
-           for (j-count . j-strides) = (aref pattern j)
-           do (when (every (lambda (i-stride j-stride)
-                             (= (* i-stride i-count) j-stride))
-                           i-strides j-strides)
-                (setf (car (aref pattern i)) (* i-count j-count))
-                (return-from merge-pattern-1 (remove-index pattern j)))))))
-
-(defun merge-pattern (pattern)
-  (declare (type simple-vector pattern))
-  (loop
-    (let ((new-pattern (merge-pattern-1 pattern)))
-      (if new-pattern
-          (setf pattern new-pattern)
-          (return pattern)))))
-
-(defun optimize-pattern (offset-and-shape &rest offsets-and-shapes)
-  (let* ((data    (cons offset-and-shape offsets-and-shapes))
-         (offsets (map '(simple-array index 1) #'car data))
-         (shapes  (map 'simple-vector #'cdr data))
-         (pattern (merge-shapes offsets shapes)))
-    (sort pattern (lambda (x y)
-                    (ecase (lex-compare (cdr x) (cdr y))
-                      (-1 nil)
-                      ( 0 (< (car x) (car y)))
-                      ( 1 t))))
-    (cons offsets
-          (if (zerop (length pattern))
-              (make-array 1 :initial-element
-                          (cons 1 (make-array (length data)
-                                              :element-type 'fixnum
-                                              :initial-element 0)))
-              (merge-pattern pattern)))))

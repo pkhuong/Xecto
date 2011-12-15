@@ -21,8 +21,7 @@
   (hash nil :type (or null (and unsigned-byte fixnum))
             :read-only t)
   (fun  nil :type (or symbol function)
-            :read-only t)
-  (%executed nil))
+            :read-only t))
 
 (defstruct stack
   (lock   (make-mutex) :type mutex
@@ -121,18 +120,31 @@
           (stack-push stack task)
           (loop for task = (stack-pop stack)
                 while task
-                do (assert (null (compare-and-swap (task-%executed task) nil t)))
-                   (funcall (task-fun task) task)))))
+                do (funcall (task-fun task) task)))))
      :name "Work queue worker")))
 
-(defun make (nthread)
-  (declare (type (and unsigned-byte fixnum) nthread))
-  (let* ((threads (make-array nthread))
-         (queue   (%make-queue nthread
-                               (list :running)
-                               (map-into (make-array nthread) #'sb-queue:make-queue)
-                               (map-into (make-array nthread) #'make-stack)
-                               threads)))
+(defun make (nthread &optional constructor &rest arguments)
+  (declare (type (and unsigned-byte fixnum) nthread)
+           (dynamic-extent arguments))
+  (let* ((state   (list :running))
+         (queues  (map-into (make-array nthread) #'sb-queue:make-queue))
+         (stacks  (map-into (make-array nthread) #'make-stack))
+         (threads (make-array nthread))
+         (queue   (if constructor
+                      (apply constructor
+                             :lock    (make-mutex)
+                             :cvar    (make-waitqueue)
+                             :nthread nthread
+                             :state   state
+                             :queues  queues
+                             :stacks  stacks
+                             :threads threads
+                             arguments)
+                      (%make-queue nthread
+                                   state
+                                   queues
+                                   stacks
+                                   threads))))
     (finalize queue (let ((lock  (queue-lock queue))
                           (cvar  (queue-cvar queue))
                           (state (queue-state queue)))
