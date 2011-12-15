@@ -21,7 +21,8 @@
   (hash nil :type (or null (and unsigned-byte fixnum))
             :read-only t)
   (fun  nil :type (or symbol function)
-            :read-only t))
+            :read-only t)
+  (%executed nil))
 
 (defstruct stack
   (lock   (make-mutex) :type mutex
@@ -120,7 +121,8 @@
           (stack-push stack task)
           (loop for task = (stack-pop stack)
                 while task
-                do (funcall (task-fun task) task)))))
+                do (assert (null (compare-and-swap (task-%executed task) nil t)))
+                   (funcall (task-fun task) task)))))
      :name "Work queue worker")))
 
 (defun make (nthread)

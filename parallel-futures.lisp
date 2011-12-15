@@ -27,7 +27,7 @@
   (after         nil :type function      :read-only t)
   (data          nil :read-only t))
 
-(defun future-fun (future)
+(defun %future-fun (future)
   (declare (type future future))
   (funcall (future-before future) (future-data future))
   (if (zerop (length (future-units future)))
@@ -46,7 +46,7 @@
   (parent nil :type future   :read-only t)
   (task   nil :type function :read-only t))
 
-(defun task-fun (task)
+(defun %task-fun (task)
   (declare (type task task))
   (let ((future (task-parent task)))
     (funcall (task-task task) (future-data future))
@@ -59,9 +59,9 @@
             (lambda (fun)
               (etypecase fun
                 (function
-                 (%make-task future fun #'task-fun))
+                 (%make-task future fun #'%task-fun))
                 ((cons function (and unsigned-byte fixnum))
-                 (%make-task future (car fun) #'task-fun
+                 (%make-task future (car fun) #'%task-fun
                              (cdr fun)))))
             during)
   future)
@@ -70,7 +70,7 @@
   (let* ((dependencies (make-array (length dependencies)
                                    :initial-contents dependencies))
          (units        (make-array (length during)))
-         (future       (%make-future #'future-fun
+         (future       (%make-future #'%future-fun
                                      dependencies
                                      before
                                      units
