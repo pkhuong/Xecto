@@ -2,7 +2,8 @@
   (:use "CL" "SB-EXT" "SB-THREAD")
   (:export "MAKE" "P" "QUEUE" "ALIVE-P"
            "TASK" "TASK-HASH" "TASK-FUN" "HASH" "FUN"
-           "ENQUEUE" "ENQUEUE-ALL" "STOP")
+           "ENQUEUE" "ENQUEUE-ALL" "STOP"
+           "PUSH-SELF" "PUSH-SELF-ALL")
   (:nicknames "WQ"))
 
 (in-package "WORK-QUEUE")
@@ -33,6 +34,13 @@
 (defun stack-push (stack x)
   (with-mutex ((stack-lock stack))
     (vector-push-extend x (stack-data stack))))
+
+(defun stack-push-all (stack values)
+  (with-mutex ((stack-lock stack))
+    (let ((data (stack-data stack)))
+      (map nil (lambda (x)
+                 (vector-push-extend x data))
+           values))))
 
 (defun stack-pop (stack)
   (with-mutex ((stack-lock stack))
@@ -86,6 +94,8 @@
         (when task
           (return-from grab-task task))))))
 
+(defvar *worker-id* nil)
+
 (defun %make-worker (queue i)
   (let* ((lock   (queue-lock queue))
          (cvar   (queue-cvar queue))
@@ -93,8 +103,8 @@
          (queues (queue-queues queue))
          (stacks (queue-stacks queue))
          (stack  (aref stacks i)))
-    (sb-thread:make-thread
-     (lambda ()
+    (make-thread
+     (lambda (&aux (*worker-id* i))
        (loop
         (let ((task
                 (with-mutex (lock)
@@ -136,7 +146,8 @@
   (declare (type queue queue))
   (with-mutex ((queue-lock queue))
     (setf (car (queue-state queue)) :done)
-    (condition-broadcast (queue-cvar queue))))
+    (condition-broadcast (queue-cvar queue)))
+  nil)
 
 (defun alive-p (queue)
   (declare (type queue queue))
@@ -156,9 +167,35 @@
   (declare (type queue queue))
   (with-mutex ((queue-lock queue))
     (assert (alive-p queue))
-    (map nil (lambda (task)
-               (let ((index (mod (get-task-hash task) (queue-nthread queue))))
-                 (sb-queue:enqueue task (aref (queue-queues queue) index))))
-         tasks)
+    (let ((nthread (queue-nthread queue))
+          (queues  (queue-queues  queue)))
+      (map nil (lambda (task)
+                 (let ((index (mod (get-task-hash task) nthread)))
+                   (sb-queue:enqueue task (aref queues index))))
+           tasks))
     (condition-broadcast (queue-cvar queue)))
   nil)
+
+(defun push-self (queue task)
+  (declare (type queue queue)
+           (type task  task))
+  (assert (alive-p queue))
+  (let ((id *worker-id*))
+    (cond (id
+           (assert (eql (aref (queue-threads queue) id)
+                        *current-thread*))
+           (stack-push (aref (queue-stacks queue) id) task))
+          (t
+           (enqueue queue task)))))
+
+(defun push-self-all (queue tasks)
+  (declare (type queue queue))
+  (assert (alive-p queue))
+  (let ((id *worker-id*))
+    (cond (id
+           (assert (eql (aref (queue-threads queue) id)
+                        *current-thread*))
+           (let ((stack (aref (queue-stacks queue) id)))
+             (stack-push-all stack tasks)))
+          (t
+           (enqueue-all queue tasks)))))
