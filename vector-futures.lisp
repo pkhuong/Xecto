@@ -5,6 +5,7 @@
            "RELEASE"
            "MAKE"
            "WAIT"
+           "DATA"
            "STATUS"))
 
 (in-package "VECTOR-FUTURE")
@@ -17,6 +18,11 @@
   (size     0 :type (and unsigned-byte fixnum))
   (data   nil :type (or null (simple-array double-float 1)))
   (%parallel-future nil :type parallel-future:future))
+
+(defun data (vector-future)
+  (declare (type vector-future vector-future))
+  (the (not null)
+       (vector-future-data vector-future)))
 
 (defun retain (future)
   (when (zerop (atomic-incf (vector-future-refcount future)))
