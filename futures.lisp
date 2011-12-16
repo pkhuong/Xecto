@@ -77,6 +77,8 @@
       (let ((status (slow-status-status slow-status)))
         (when (member status from)
           (setf (slow-status-status slow-status) to)
+          (when (or (eql to :done) (eql to :cancelled))
+            (setf (future-%status future) to))
           (condition-broadcast (slow-status-cvar slow-status)))
         status))))
 
