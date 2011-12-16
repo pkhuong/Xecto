@@ -69,7 +69,7 @@
                          :read-only t)
   (state   (error "foo") :type cons
                          :read-only t)
-  (queues  (error "Foo") :type (simple-array sb-queue:queue 1)
+  (queues  (error "Foo") :type (simple-array mpsc-queue:queue 1)
                          :read-only t)
   (stacks  (error "Foo") :type (simple-array stack 1)
                          :read-only t)
@@ -84,7 +84,7 @@
   (let ((n (length queues)))
     (dotimes (j n)
       (let* ((i    (mod (+ i j) n))
-             (task (sb-queue:dequeue (aref queues i))))
+             (task (mpsc-queue:get (aref queues i))))
         (when task
           (return-from grab-task task)))))
   (let ((n (length stacks)))
@@ -127,7 +127,7 @@
   (declare (type (and unsigned-byte fixnum) nthread)
            (dynamic-extent arguments))
   (let* ((state   (list :running))
-         (queues  (map-into (make-array nthread) #'sb-queue:make-queue))
+         (queues  (map-into (make-array nthread) #'mpsc-queue:make))
          (stacks  (map-into (make-array nthread) #'make-stack))
          (threads (make-array nthread))
          (queue   (if constructor
@@ -173,7 +173,7 @@
   (with-mutex ((queue-lock queue))
     (assert (alive-p queue))
     (let ((index (mod (get-task-hash task) (queue-nthread queue))))
-      (sb-queue:enqueue task (aref (queue-queues queue) index)))
+      (mpsc-queue:put (aref (queue-queues queue) index) task))
     (condition-broadcast (queue-cvar queue)))
   nil)
 
@@ -185,7 +185,7 @@
           (queues  (queue-queues  queue)))
       (map nil (lambda (task)
                  (let ((index (mod (get-task-hash task) nthread)))
-                   (sb-queue:enqueue task (aref queues index))))
+                   (mpsc-queue:put (aref queues index) task)))
            tasks))
     (condition-broadcast (queue-cvar queue)))
   nil)
