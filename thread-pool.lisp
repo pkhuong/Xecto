@@ -1,14 +1,31 @@
 (defpackage "WORK-QUEUE"
   (:use "CL" "SB-EXT" "SB-THREAD")
-  (:export "MAKE" "P" "QUEUE" "ALIVE-P"
-           "TASK" "TASK-P" "TASK-FUN" "BULK-TASK" "BULK-TASK-P" "TASK-DESIGNATOR"
+  (:export "TASK" "TASK-P" "BULK-TASK" "BULK-TASK-P"
+           "TASK-DESIGNATOR"
+           "QUEUE" "MAKE" "P" "ALIVE-P"
            "ENQUEUE" "ENQUEUE-ALL" "STOP"
            "PUSH-SELF" "PUSH-SELF-ALL")
   (:import-from "WORK-STACK"
-                "TASK" "TASK-P" "TASK-FUN"
+                "TASK" "TASK-P"
                 "BULK-TASK" "BULK-TASK-P"
-                "TASK-DESIGNATOR")
-  (:nicknames "WQ"))
+                "TASK-DESIGNATOR"))
+
+;;; Work-unit queue/stack, with thread-pool
+;;;
+;;; Normal work queue: created with a fixed number of worker threads,
+;;; and a shared FIFO of work units (c.f. work-stack).
+;;;
+;;; However, each worker also has a work-stack.  This way, tasks can
+;;; spawn new tasks recursively, while enjoying temporal locality and
+;;; skipping in front of the rest of the queue.
+;;;
+;;; ENQUEUE/ENQUEUE-ALL insert work units in the queue.
+;;;
+;;; PUSH-SELF/PUSH-SELF-ALL insert work units in the worker's local
+;;; stack, or, if not executed by a worker, punt to ENQUEUE/ENQUEUE-ALL.
+;;;
+;;; Note that the work-stacks support task-stealing, so pushing to the
+;;; local stack does not reduce parallelism.
 
 (in-package "WORK-QUEUE")
 
@@ -45,6 +62,7 @@
           (return-from grab-task task))))))
 
 (defvar *worker-id* nil)
+(defvar *current-queue* nil)
 
 (defun %make-worker (wqueue i)
   (let* ((lock   (queue-lock   wqueue))
@@ -55,17 +73,21 @@
          (stack  (aref stacks i))
          (hint   (float (/ i (queue-nthread wqueue)) 1d0)))
     (make-thread
-     (lambda (&aux (*worker-id* i))
+     (lambda (&aux (*worker-id* i) (*current-queue* wqueue))
        (loop named outer do
-         (let ((task
-                 (with-mutex (lock)
-                   (loop
-                     (when (eql (car state) :done)
-                       (return-from outer))
-                     (let ((task (grab-task queue stacks i)))
-                       (when task
-                         (return task)))
-                     (condition-wait cvar lock)))))
+         (let* ((timeout 1e-4)
+                (task
+                  (with-mutex (lock)
+                    (loop
+                      (when (eql (car state) :done)
+                        (return-from outer))
+                      (let ((task (grab-task queue stacks i)))
+                        (when task
+                          (return task)))
+                      (condition-wait cvar lock :timeout timeout)
+                      (when (< timeout 1e0)
+                        (setf timeout (* timeout 2)))))))
+           (declare (type single-float timeout))
            (if (bulk-task-p task)
                (work-stack:push stack task hint)
                (work-stack:execute-task task))
@@ -116,30 +138,29 @@
   (declare (type queue queue))
   (eql (car (queue-state queue)) :running))
 
-(defun enqueue (queue task)
-  (declare (type queue queue)
-           (type task  task))
+(defun enqueue (task &optional (queue *current-queue*))
+  (declare (type task-designator task)
+           (type queue queue))
   (with-mutex ((queue-lock queue))
     (assert (alive-p queue))
-    ;; FIXME
     (sb-queue:enqueue task (queue-queue queue))
     (condition-broadcast (queue-cvar queue)))
   nil)
 
-(defun enqueue-all (queue tasks)
+(defun enqueue-all (tasks &optional (queue *current-queue*))
   (declare (type queue queue))
   (with-mutex ((queue-lock queue))
     (assert (alive-p queue))
-    (let ((queue   (queue-queue queue)))
+    (let ((queue (queue-queue queue)))
       (map nil (lambda (task)
                  (sb-queue:enqueue task queue))
            tasks))
     (condition-broadcast (queue-cvar queue)))
   nil)
 
-(defun push-self (queue task)
+(defun push-self (task &optional (queue *current-queue*))
   (declare (type queue queue)
-           (type task  task))
+           (type task-designator task))
   (assert (alive-p queue))
   (let ((id *worker-id*))
     (cond (id
@@ -149,7 +170,7 @@
           (t
            (enqueue queue task)))))
 
-(defun push-self-all (queue tasks)
+(defun push-self-all (tasks &optional (queue *current-queue*))
   (declare (type queue queue))
   (assert (alive-p queue))
   (let ((id *worker-id*))
