@@ -1,7 +1,26 @@
 (defpackage "XECTO-LOOP-NEST"
   (:use "CL")
   (:shadow "OPTIMIZE")
-  (:export "OPTIMIZE"))
+  (:export "OPTIMIZE" "*MINIMAL-INNER-TRIP-COUNT*"))
+
+;;; Optimize perfect constant loop nests.
+;;; Input: (offset . shape)+
+;;;  offset: initial offset of index,
+;;;  shape: simple-vector of (trip-count . stride)
+;;;
+;;; All the shapes must be compatible: trip count is the
+;;; same at each nesting depth, and total depth is the same.
+;;;
+;;; Optimize will reorder the nesting to have lower strides
+;;; at the bottom, merge outer loops that can be expressed
+;;; as additional iterations of an inner one, and reorder the
+;;; nesting again to ensure a *minimal-inner-trip-count*, as
+;;; much as possible.
+;;;
+;;; The output is (offsets . loops), where offsets is a
+;;; (simple-array index 1) of initial offsets, and loops
+;;; a simple-vector of (trip-count . strides), where strides
+;;; is a (simple-array fixnum 1).
 
 (in-package "XECTO-LOOP-NEST")
 
@@ -73,6 +92,23 @@
           (setf pattern new-pattern)
           (return pattern)))))
 
+(defvar *minimal-inner-trip-count* 16)
+
+(defun ensure-minimal-trip-count (pattern)
+  (declare (type simple-vector pattern))
+  (let ((best-index nil)
+        (best-count   0))
+    (loop for i upfrom 0
+          for (count) across pattern
+          for clamped-count = (min count *minimal-inner-trip-count*)
+          do (when (>= clamped-count best-count)
+               (setf best-index i)))
+    (assert best-index)
+    (let ((inner-loop (aref pattern best-index)))
+      (replace pattern pattern :start1 best-index :start2 (1+ best-index))
+      (setf (aref pattern (1- (length pattern))) inner-loop))
+    pattern))
+
 (defun optimize (offset-and-shape &rest offsets-and-shapes)
   (let* ((data    (cons offset-and-shape offsets-and-shapes))
          (offsets (map '(simple-array index 1) #'car data))
@@ -86,7 +122,7 @@
     (cons offsets
           (if (zerop (length pattern))
               (make-array 1 :initial-element
-                          (cons 1 (make-array (length data)
-                                              :element-type 'fixnum
-                                              :initial-element 0)))
-              (merge-pattern pattern)))))
+                            (cons 1 (make-array (length data)
+                                                :element-type 'fixnum
+                                                :initial-element 0)))
+              (ensure-minimal-trip-count (merge-pattern pattern))))))
