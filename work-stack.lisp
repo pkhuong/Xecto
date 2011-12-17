@@ -213,8 +213,6 @@
              (stacklet  (aref stacklets major))
              (position  (position nil stacklet :from-end t :end minor :test-not #'eql)))
         (cond (position
-               (setf (stack-top stack) (+ (* major +stacklet-size+)
-                                          position))
                (let ((x (aref stacklet position)))
                  (etypecase x
                    (null)
@@ -222,12 +220,16 @@
                     (let ((bulk-task (cdr x)))
                       (when (and bulk-task
                                  (plusp (bulk-task-waiting bulk-task)))
+                        (setf (stack-top stack) (+ 1 (* major +stacklet-size+)
+                                                   position))
                         (return x)))
                     (setf (cdr x) nil
                           (svref stacklet position) nil
                           (stack-top stack) (+ (* major +stacklet-size+)
                                                position)))
                    ((or task symbol function)
+                    (setf (stack-top stack) (+ (* major +stacklet-size+)
+                                               position))
                     (when (eql (cas (svref stacklet position) x nil) x)
                       (return x))))))
               ((zerop major)
