@@ -6,6 +6,22 @@
            "MAKE"
            "DATA"))
 
+;;; A vector-future is a parallel future that is also
+;;; an on-demand-allocated vector.
+;;;
+;;; There's also a reference count in prevision of storage reuse
+;;; and/or foreign allocation.
+;;;
+;;; retain/release update the reference count.
+;;; data returns the data vector for a vector-future
+;;; make creates a new vector future with a refcount of 1.
+;;; (make allocation dependencies tasks)
+;;;  allocation defines the allocation procedure.
+;;;   integer -> make a brand new array
+;;;   vector-future: make a copy of the vector
+;;; dependencies: list of dependencies (vector-futures)
+;;; tasks: vector of functions (subtasks)
+
 (in-package "VECTOR-FUTURE")
 
 (defstruct (vector-future
@@ -72,9 +88,10 @@
                   (vector-future-size allocation)
                   allocation)))
     (apply 'parallel-future:make
-           (coerce (if (vector-future-p allocation)
-                       (adjoin allocation dependencies)
-                       dependencies)
+           (coerce (remove-duplicates
+                    (if (vector-future-p allocation)
+                        (adjoin allocation dependencies)
+                        dependencies))
                    'simple-vector) 
            (make-allocator allocation)
            (coerce tasks 'simple-vector)
