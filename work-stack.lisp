@@ -51,20 +51,23 @@
 (defun p (x)
   (stack-p x))
 
-(defun bulk-task-hintify (x)
+(defun bulk-task-hintify (x &optional (hint 0))
   (if (bulk-task-p x)
-      (cons 0 x)
+      (cons (truncate (* hint (length (bulk-task-subtasks x))))
+            x)
       x))
 
-(defun push (stack x)
+(defun push (stack x &optional (hint 0))
   (with-mutex ((stack-lock stack))
-    (vector-push-extend (bulk-task-hintify x) (stack-data stack))))
+    (vector-push-extend (bulk-task-hintify x hint)
+                        (stack-data stack))))
 
-(defun push-all (stack values)
+(defun push-all (stack values &optional (hint 0))
   (with-mutex ((stack-lock stack))
     (let ((data (stack-data stack)))
       (map nil (lambda (x)
-                 (vector-push-extend (bulk-task-hintify x) data))
+                 (vector-push-extend (bulk-task-hintify x hint)
+                                     data))
            values))))
 
 (defun steal (stack)
@@ -72,7 +75,9 @@
     (let ((data (stack-data stack)))
       (loop for i below (length data)
             for x = (aref data i)
-            do (cond ((null x))
+            do (when (consp x)
+                 (setf x (cdr x)))
+               (cond ((null x))
                      ((not (bulk-task-p x))
                       (shiftf (aref data i) nil)
                       (return x))
@@ -83,8 +88,7 @@
 
 (defun bulk-find-task (hint-and-bulk)
   (declare (type cons hint-and-bulk))
-  (destructuring-bind (hint . bulk)
-      hint-and-bulk
+  (destructuring-bind (hint . bulk) hint-and-bulk
     (declare (type fixnum hint)
              (type bulk-task bulk))
     (let ((subtasks (bulk-task-subtasks bulk)))

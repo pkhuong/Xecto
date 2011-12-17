@@ -52,25 +52,24 @@
          (state  (queue-state  wqueue))
          (queue  (queue-queue  wqueue))
          (stacks (queue-stacks wqueue))
-         (stack  (aref stacks i)))
+         (stack  (aref stacks i))
+         (hint   (float (/ i (queue-nthread wqueue)) 1d0)))
     (make-thread
      (lambda (&aux (*worker-id* i))
-       (loop
-        (let ((task
-                (with-mutex (lock)
-                  (loop
-                    (when (eql (car state) :done)
-                      (return nil))
-                    (let ((task (grab-task queue stacks i)))
-                      (when task
-                        (return task)))
-                    (condition-wait cvar lock)))))
-          (unless task
-            (return))
-          (if (bulk-task-p task)
-              (work-stack:push stack task)
-              (work-stack:execute-task task))
-          (loop while (work-stack:run-one stack)))))
+       (loop named outer do
+         (let ((task
+                 (with-mutex (lock)
+                   (loop
+                     (when (eql (car state) :done)
+                       (return-from outer))
+                     (let ((task (grab-task queue stacks i)))
+                       (when task
+                         (return task)))
+                     (condition-wait cvar lock)))))
+           (if (bulk-task-p task)
+               (work-stack:push stack task hint)
+               (work-stack:execute-task task))
+           (loop while (work-stack:run-one stack)))))
      :name "Work queue worker")))
 
 (defun make (nthread &optional constructor &rest arguments)
