@@ -3,7 +3,7 @@
   (:export "FUTURE"
            "DEPENDENTS"
            "STATUS" "WAIT" "CANCEL"
-           "MARK-DEPENDENCIES" "MARK-DONE" "THAW"))
+           "MARK-DEPENDENCIES" "THAW" "MARK-DONE"))
 
 ;;; Infrastructure for futures: lenient-evaluated values
 ;;;
