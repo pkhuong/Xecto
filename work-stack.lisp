@@ -7,6 +7,31 @@
            "STACK" "MAKE" "P"
            "PUSH" "PUSH-ALL" "STEAL" "RUN-ONE"))
 
+;;; Work-unit stack
+;;;
+;;; Normal task-stealing stack, with special support for tasks composed of subtasks.
+;;;
+;;; A task designator is either a function designator, a task, or a bulk-task.
+;;;
+;;; A function designator is called, and a task's fun is called with the task as its
+;;; only argument.
+;;;
+;;; When only those are used, the work stack is a normal stack of task units, with
+;;; PUSH to insert a new task (PUSH-ALL to insert a sequence of tasks), STEAL to get
+;;; one task from the bottom of the stack, and RUN-ONE to execute and pop the topmost
+;;; task.
+;;;
+;;; Bulk-task objects represent a set of subtasks to be executed, and a sequence of
+;;; operations to perform once all the subtasks have been completed.
+;;;
+;;; Task stealing of bulk tasks is special: bulk tasks have multiple owners, so bulk
+;;; tasks aren't stolen as much as forcibly shared.  All the workers that share a bulk
+;;; task cooperate to complete the subtasks.  The last worker to finish executing a
+;;; subtask then executes the cleanups.
+;;;
+;;; Subtasks and cleanups are functions that are called with the subtask as their one
+;;; argument.
+
 (in-package "WORK-STACK")
 
 (defstruct (task
@@ -16,9 +41,9 @@
 
 (defstruct (bulk-task
             (:constructor nil))
-  ;; count waiting to be executed
+  ;; count waiting to be executed, initially (length subtasks)
   (waiting   (error "Missing arg") :type word)
-  ;; count not done yet
+  ;; count not done yet, initially (length subtasks)
   (remaining (error "Missing arg") :type word)
   (subtasks  (error "Missing arg") :type (simple-array (or symbol function) 1)
                                    :read-only t)
@@ -32,8 +57,6 @@
   (etypecase task
     ((or symbol function)
      (funcall task))
-    (bulk-task
-     (error "~S of ~S not supported" 'execute-task 'bulk-task))
     (task
      (funcall (task-fun task) task))))
 
@@ -95,12 +118,15 @@
   (declare (type cons hint-and-bulk))
   (destructuring-bind (hint . bulk) hint-and-bulk
     (declare (type fixnum hint)
-             (type bulk-task bulk))
+             (type (or null bulk-task) bulk))
+    (when (null bulk)
+      (return-from bulk-find-task))
     (let* ((subtasks (bulk-task-subtasks bulk))
            (begin    hint)
            (end      (length subtasks)))
       (loop
         (when (zerop (bulk-task-waiting bulk))
+          (setf (cdr hint-and-bulk) nil)
           (return (values nil nil)))
         (let ((index (position nil subtasks :start begin :end end :test-not #'eql)))
           (cond (index
@@ -110,50 +136,59 @@
                               x)
                      (atomic-decf (bulk-task-waiting bulk))
                      (setf (car hint-and-bulk) begin)
-                     (return (values x index)))))
+                     (return x))))
                 ((zerop begin)
-                 (setf (car hint-and-bulk) 0)
-                 (return (values nil nil)))
+                 (setf (cdr hint-and-bulk) nil)
+                 (return))
                 (t
                  (setf begin 0
                        end   hint))))))))
 
-(defun run-one (stack)
+(defun get-one-task (stack)
   (with-mutex ((stack-lock stack))
     (let ((data (stack-data stack)))
       (loop
-       (let* ((index (position nil data :from-end t
-                                        :test-not #'eql))
-              (task  (and index (aref data index))))
-         (flet ((clear ()
-                  (setf (aref data index)   nil
-                        (fill-pointer data) index)))
-           (declare (inline clear))
-           (etypecase task
-             (null
-              (setf (fill-pointer data) 0)
-              (return nil))
-             (cons
-              (let ((subtask (bulk-find-task task)))
-                (if subtask
-                    (let ((bulk-task (cdr task)))
-                      (funcall subtask bulk-task)
-                      (when (= (atomic-decf (bulk-task-remaining bulk-task))
-                               1)
-                        (let ((cleanup (bulk-task-cleanup bulk-task)))
-                          (etypecase cleanup
-                            (null)
-                            (cons
-                             (dolist (cleanup cleanup)
-                               (funcall cleanup bulk-task)))
-                            ((or function symbol)
-                             (funcall cleanup bulk-task))))
-                        (clear))
-                      (return t))
-                    (clear))))
-             ((or task symbol function)
-              (clear)
-              (if (task-p task)
-                  (funcall (task-fun task) task)
-                  (funcall task))
-              (return t)))))))))
+        (let* ((index (position nil data :from-end t
+                                         :test-not #'eql))
+               (task  (and index (aref data index))))
+          (flet ((clear ()
+                   (setf (aref data index)   nil
+                         (fill-pointer data) index)))
+            (declare (inline clear))
+            (etypecase task
+              (null
+               (setf (fill-pointer data) 0)
+               (return nil))
+              (cons
+               (let ((bulk-task (cdr task)))
+                 (when (and bulk-task
+                            (plusp (bulk-task-waiting bulk-task)))
+                   (return task))
+                 (clear)))
+              ((or task symbol function)
+               (clear)
+               (return task)))))))))
+
+(defun run-one (stack)
+  (let ((task (get-one-task stack))
+        subtask)
+    (cond ((not task) nil)
+          ((atom task)
+           (execute-task task)
+           t)
+          ((setf subtask (bulk-find-task task))
+           (let ((bulk-task (cdr task)))
+             (funcall subtask bulk-task)
+             (when (= (atomic-decf (bulk-task-remaining bulk-task))
+                      1)
+               (let ((cleanup (bulk-task-cleanup bulk-task)))
+                 (etypecase cleanup
+                   (null)
+                   (cons
+                    (dolist (cleanup cleanup)
+                      (funcall cleanup bulk-task)))
+                   ((or function symbol)
+                    (funcall cleanup bulk-task))))))
+           t)
+          (t
+           (run-one stack)))))
