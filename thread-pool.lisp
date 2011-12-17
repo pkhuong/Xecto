@@ -66,6 +66,7 @@
 (defvar *worker-hint* 0)
 (defvar *current-queue* nil)
 
+(declaim (inline current-queue))
 (defun current-queue ()
   (and *current-queue*
        (weak-pointer-value *current-queue*)))
@@ -160,7 +161,7 @@
   (declare (type queue queue))
   (eql (car (queue-state queue)) :running))
 
-(defun enqueue (task &optional (queue *current-queue*))
+(defun enqueue (task &optional (queue (current-queue)))
   (declare (type task-designator task)
            (type queue queue))
   (with-mutex ((queue-lock queue))
@@ -169,7 +170,7 @@
     (condition-broadcast (queue-cvar queue)))
   nil)
 
-(defun enqueue-all (tasks &optional (queue *current-queue*))
+(defun enqueue-all (tasks &optional (queue (current-queue)))
   (declare (type queue queue))
   (with-mutex ((queue-lock queue))
     (assert (alive-p queue))
@@ -180,7 +181,7 @@
     (condition-broadcast (queue-cvar queue)))
   nil)
 
-(defun push-self (task &optional (queue *current-queue*))
+(defun push-self (task &optional (queue (current-queue)))
   (declare (type queue queue)
            (type task-designator task))
   (assert (alive-p queue))
@@ -192,7 +193,7 @@
           (t
            (enqueue task queue)))))
 
-(defun push-self-all (tasks &optional (queue *current-queue*))
+(defun push-self-all (tasks &optional (queue (current-queue)))
   (declare (type queue queue))
   (assert (alive-p queue))
   (let ((id *worker-id*))
