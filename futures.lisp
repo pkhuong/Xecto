@@ -72,9 +72,9 @@
 (defstruct (future
             (:include work-stack:bulk-task)
             (:constructor nil))
-  (function     nil :type (or list symbol function) :read-only t)
+  (function     nil :type (or list symbol function))
   (dependents   nil :type (or list (member :done :cancelled)))
-  (dependencies nil :type simple-vector    :read-only t)
+  (dependencies nil :type simple-vector)
   (depcount       0 :type word)
   (%status  :orphan :type (or status slow-status)))
 
@@ -152,7 +152,8 @@
        (dolist (function function)
          (funcall function future)))
       ((or symbol function)
-       (funcall function future))))
+       (funcall function future)))
+    (setf (future-function future) nil))
   nil)
 
 (defun cancel (future)
@@ -218,6 +219,7 @@
   (declare (type future future))
   (unless (eql :running (status-upgrade future :done :running))
     (return-from mark-done))
+  (setf (future-dependencies future) #())
   (let ((dependents
           (loop
             (let ((dependents (future-dependents future)))

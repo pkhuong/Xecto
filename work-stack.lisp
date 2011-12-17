@@ -47,8 +47,7 @@
 
 (defstruct (task
             (:constructor nil))
-  (fun (error "Missing arg") :type (or symbol function)
-                             :read-only t))
+  (fun (error "Missing arg") :type (or symbol function)))
 
 (defstruct (bulk-task
             (:constructor nil))
@@ -56,10 +55,8 @@
   (waiting   (error "Missing arg") :type word)
   ;; count not done yet, initially (length subtasks)
   (remaining (error "Missing arg") :type word)
-  (subtasks  (error "Missing arg") :type (simple-array (or symbol function) 1)
-                                   :read-only t)
-  (cleanup   nil                   :type (or list symbol function)
-                                   :read-only t))
+  (subtasks  (error "Missing arg") :type (simple-array (or symbol function) 1))
+  (cleanup   nil                   :type (or list symbol function)))
 
 (deftype task-designator ()
   `(or symbol function task bulk-task))
@@ -69,7 +66,8 @@
     ((or symbol function)
      (funcall task))
     (task
-     (funcall (task-fun task) task))))
+     (prog1 (funcall (task-fun task) task)
+       (setf (task-fun task) nil)))))
 
 (defstruct stack
   (lock   (make-mutex) :type mutex
@@ -193,10 +191,12 @@
            t)
           ((setf subtask (bulk-find-task task))
            (let ((bulk-task (cdr task)))
+             (declare (type bulk-task bulk-task))
              (funcall subtask bulk-task)
              (when (= (atomic-decf (bulk-task-remaining bulk-task))
                       1)
                (setf (cdr task) nil)
+               (setf (bulk-task-subtasks bulk-task) #())
                (let ((cleanup (bulk-task-cleanup bulk-task)))
                  (etypecase cleanup
                    (null)
@@ -204,7 +204,8 @@
                     (dolist (cleanup cleanup)
                       (funcall cleanup bulk-task)))
                    ((or function symbol)
-                    (funcall cleanup bulk-task))))))
+                    (funcall cleanup bulk-task))))
+               (setf (bulk-task-cleanup bulk-task) nil)))
            t)
           (t
            (run-one stack)))))

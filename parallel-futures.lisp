@@ -30,8 +30,7 @@
 
 (defstruct (future
             (:include future:future))
-  (context *context* :type work-queue:queue :read-only t)
-  (setup   nil       :type (or list symbol function) :read-only t))
+  (setup nil :type (or list symbol function)))
 
 (declaim (inline p))
 (defun p (x)
@@ -50,6 +49,7 @@
 (defun future-push-self (future)
   (declare (type future future))
   (let ((setup (future-setup future)))
+    (setf (future-setup future) nil)
     (work-queue:push-self
      (lambda ()
        (map-list-designator setup future)
