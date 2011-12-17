@@ -22,10 +22,10 @@
 
 (in-package "PARALLEL-FUTURE")
 
-(defvar *context* (work-queue:make 2))
+(defvar *context* (work-queue:make 2 nil :bindings `((*context* . ,#'work-queue:current-queue))))
 
 (defmacro with-context ((count) &body body)
-  `(let ((*context* (work-queue:make ,count)))
+  `(let ((*context* (work-queue:make ,count nil :bindings `((*context* . ,#'work-queue:current-queue)))))
      ,@body))
 
 (defstruct (future

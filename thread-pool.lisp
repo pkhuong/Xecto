@@ -4,7 +4,8 @@
            "TASK-DESIGNATOR"
            "QUEUE" "MAKE" "P" "ALIVE-P"
            "ENQUEUE" "ENQUEUE-ALL" "STOP"
-           "PUSH-SELF" "PUSH-SELF-ALL")
+           "PUSH-SELF" "PUSH-SELF-ALL"
+           "CURRENT-QUEUE")
   (:import-from "WORK-STACK"
                 "TASK" "TASK-P"
                 "BULK-TASK" "BULK-TASK-P"
@@ -65,7 +66,10 @@
 (defvar *worker-hint* 0)
 (defvar *current-queue* nil)
 
-(defun %make-worker (wqueue i)
+(defun current-queue ()
+  (the queue *current-queue*))
+
+(defun %make-worker (wqueue i &optional binding-names binding-compute)
   (let* ((lock   (queue-lock   wqueue))
          (cvar   (queue-cvar   wqueue))
          (state  (queue-state  wqueue))
@@ -76,25 +80,28 @@
          (hint   (float (/ i nthread) 1d0)))
     (make-thread
      (lambda (&aux (*worker-id* i) (*current-queue* wqueue) (*worker-hint* hint))
-       (loop named outer do
-         (let* ((timeout 1e-4)
-                (task
-                  (with-mutex (lock)
-                    (loop
-                      (when (eql (car state) :done)
-                        (return-from outer))
-                      (let ((task (grab-task queue stacks i)))
-                        (when task
-                          (return task)))
-                      (unless (condition-wait cvar lock :timeout timeout)
-                        (grab-mutex lock))
-                      (when (< timeout 1e0)
-                        (setf timeout (* timeout 2)))))))
-           (declare (type single-float timeout))
-           (if (bulk-task-p task)
-               (work-stack:push stack task hint)
-               (work-stack:execute-task task))
-           (loop while (work-stack:run-one stack)))))
+       (progv binding-names (mapcar (lambda (x)
+                                      (if (functionp x) (funcall x) x))
+                                    binding-compute)
+         (loop named outer do
+           (let* ((timeout 1e-4)
+                  (task
+                    (with-mutex (lock)
+                      (loop
+                        (when (eql (car state) :done)
+                          (return-from outer))
+                        (let ((task (grab-task queue stacks i)))
+                          (when task
+                            (return task)))
+                        (unless (condition-wait cvar lock :timeout timeout)
+                          (grab-mutex lock))
+                        (when (< timeout 1e0)
+                          (setf timeout (* timeout 2)))))))
+             (declare (type single-float timeout))
+             (if (bulk-task-p task)
+                 (work-stack:push stack task hint)
+                 (work-stack:execute-task task))
+             (loop while (work-stack:run-one stack))))))
      :name (format nil "Work queue worker ~A/~A" i nthread))))
 
 (defun make (nthread &optional constructor &rest arguments)
@@ -104,6 +111,10 @@
          (queue   (sb-queue:make-queue))
          (stacks  (map-into (make-array nthread) #'work-stack:make))
          (threads (make-array nthread))
+         (default-bindings (getf arguments :bindings))
+         (arguments (loop for (key value) on arguments by #'cddr
+                          unless (eql key :bindings)
+                            nconc (list key value)))
          (wqueue  (if constructor
                       (apply constructor
                              :lock    (make-mutex)
@@ -126,9 +137,11 @@
                         (with-mutex (lock)
                           (setf (car state) :done)
                           (condition-broadcast cvar)))))
-    (dotimes (i nthread wqueue)
-      (setf (aref threads i)
-            (%make-worker wqueue i)))))
+    (let ((binding-names (mapcar #'car default-bindings))
+          (binding-values (mapcar #'cdr default-bindings)))
+      (dotimes (i nthread wqueue)
+        (setf (aref threads i)
+              (%make-worker wqueue i binding-names binding-values))))))
 
 (defun stop (queue)
   (declare (type queue queue))
