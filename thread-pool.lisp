@@ -71,6 +71,27 @@
   (and *current-queue*
        (weak-pointer-value *current-queue*)))
 
+(defun loop-get-task (state lock cvar queue stacks i)
+  (flet ((try ()
+           (when (eql (car state) :done)
+             (return-from loop-get-task nil))
+           (let ((task (grab-task queue stacks i)))
+             (when task
+               (return-from loop-get-task task)))))
+    (declare (inline try))
+    (dotimes (i 256)
+      (try)
+      (loop repeat (* i 128)
+            do (spin-loop-hint)))
+    (with-mutex (lock)
+      (let ((timeout 1e-5))
+        (declare (single-float timeout))
+        (loop
+          (try)
+          (unless (condition-wait cvar lock :timeout timeout)
+            (grab-mutex lock))
+          (setf timeout (min 1.0 (* timeout 1.5))))))))
+
 (defun %make-worker (wqueue i &optional binding-names binding-compute)
   (let* ((lock   (queue-lock   wqueue))
          (cvar   (queue-cvar   wqueue))
@@ -87,22 +108,9 @@
                                       (if (functionp x) (funcall x) x))
                                     binding-compute)
          (loop named outer do
-           (let* ((timeout 1e-4)
-                  (task
-                    (with-mutex (lock)
-                      (loop
-                        (when (eql (car state) :done)
-                          (return-from outer))
-                        (let ((task (grab-task queue stacks i)))
-                          (when task
-                            (return task)))
-                        (unless (condition-wait cvar lock :timeout timeout)
-                          (grab-mutex lock))
-                        (when (< timeout 1e0)
-                          (setf timeout (* timeout 2))))))
-                  (queue (weak-pointer-value weak-queue)))
-             (declare (type single-float timeout))
-             (unless queue
+           (let ((task  (loop-get-task state lock cvar queue stacks i))
+                 (queue (weak-pointer-value weak-queue)))
+             (unless (and task queue)
                (return-from outer))
              (if (bulk-task-p task)
                  (work-stack:push stack task hint)
