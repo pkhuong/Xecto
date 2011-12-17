@@ -44,8 +44,8 @@
   (when (= 1 (atomic-decf (vector-future-refcount future)))
     (let ((data (vector-future-data future)))
       (when data
-        (sb-kernel:%shrink-vector data 0)))
-    (setf (vector-future-data future) nil))
+        (setf (vector-future-data future) nil)
+        (sb-kernel:%shrink-vector data 0))))
   nil)
 
 (defun make-allocator (allocation)
@@ -55,7 +55,10 @@
      (lambda (data)
        (declare (type vector-future data))
        (retain data) ;; maybe we should just abort here...
-       (setf (vector-future-data data) (make-array allocation :element-type 'double-float))
+       (let ((vector (make-array allocation :element-type 'double-float)))
+         (setf (vector-future-data data) vector)
+         (finalize data (lambda ()
+                          (sb-kernel:%shrink-vector vector 0))))
        nil))
     (vector-future
      (retain allocation)
@@ -64,14 +67,19 @@
        (retain data)
        (let ((source (vector-future-data allocation)))
          (declare (type (simple-array double-float 1) source))
-         (if (= 1 (vector-future-refcount allocation))
-             (shiftf (vector-future-data data)
-                     (vector-future-data allocation)
-                     nil)
-             (setf (vector-future-data data)
-                   (make-array (length source)
-                               :element-type 'double-float
-                               :initial-contents source)))
+         (cond ((= 1 (vector-future-refcount allocation))
+                (shiftf (vector-future-data data)
+                        (vector-future-data allocation)
+                        nil)
+                (cancel-finalization allocation))
+               (t
+                (setf (vector-future-data data)
+                      (make-array (length source)
+                                  :element-type 'double-float
+                                  :initial-contents source))))
+         (let ((vector (vector-future-data data)))
+           (finalize data (lambda ()
+                            (sb-kernel:%shrink-vector vector 0))))
          (release allocation))
        nil))))
 
