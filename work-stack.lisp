@@ -47,7 +47,7 @@
 
 (defstruct (task
             (:constructor nil))
-  (fun (error "Missing arg") :type (or symbol function)))
+  (function (error "Missing arg") :type (or symbol function)))
 
 (defstruct (bulk-task
             (:constructor nil))
@@ -66,23 +66,90 @@
     ((or symbol function)
      (funcall task))
     (task
-     (prog1 (funcall (task-fun task) task)
-       (setf (task-fun task) nil)))))
+     (prog1 (funcall (task-function task) task)
+       (setf (task-function task) nil)))))
+
+(defconstant +stacklet-size+ 128)
+
+(declaim (inline split-index))
+(defun split-index (index)
+  (multiple-value-bind (major minor)
+      (truncate index +stacklet-size+)
+    (cond ((plusp minor)
+           (values major minor))
+          ((zerop major)
+           (values 0 0))
+          (t
+           (values (1- major) +stacklet-size+)))))
 
 (defstruct stack
-  (lock   (make-mutex) :type mutex
-                       :read-only t)
-  (data   (make-array 32 :fill-pointer 0 :adjustable t)
-                       :type (and (not simple-vector)
-                                  vector)
-                       :read-only t))
+  (stacklets (error "Foo") :type (array (simple-vector #.+stacklet-size+) 1)
+                           :read-only t)
+  (top    0 :type (and unsigned-byte fixnum)))
 
 (defun make ()
-  (make-stack))
+  (make-stack :stacklets (make-array 16 :fill-pointer 0 :adjustable t)))
 
 (declaim (inline p))
 (defun p (x)
   (stack-p x))
+
+(defun %update-stack-top (stack)
+  (declare (type stack stack))
+  (let ((top (stack-top stack)))
+    (when (zerop top)
+      (return-from %update-stack-top))
+    (multiple-value-bind (major minor) (split-index top)
+      (let* ((stacklets (stack-stacklets stack))
+             (stacklet  (aref stacklets major))
+             (position  (position nil stacklet :from-end t :end minor :test-not #'eql)))
+        (cond (position
+               (setf (stack-top stack) (+ (* major +stacklet-size+)
+                                          position 1)))
+              (t
+               (setf (stack-top stack) (* major +stacklet-size+))
+               (%update-stack-top stack)))))))
+
+(defun %push (stack value)
+  (declare (type stack stack) (type (not null) value))
+  (%update-stack-top stack)
+  (multiple-value-bind (stacklet index)
+      (truncate (stack-top stack) +stacklet-size+)
+    (let ((stacklets (stack-stacklets stack)))
+      (loop while (<= (length stacklets) stacklet)
+            do (vector-push-extend (make-array +stacklet-size+ :initial-element nil)
+                                   stacklets))
+      (let ((stacklet (aref stacklets stacklet)))
+        (setf (aref stacklet index) value)
+        (incf (stack-top stack))
+        value))))
+
+(defun steal (stack)
+  (declare (type stack stack))
+  (loop repeat (ceiling (stack-top stack) +stacklet-size+)
+        for stacklet across (stack-stacklets stack)
+        do
+           (let ((start 0))
+             (loop
+              (let* ((position  (position nil stacklet
+                                          :start start
+                                          :test-not #'eql))
+                     (x         (and position
+                                     (aref stacklet position))))
+                (cond ((null position)
+                       (return))
+                      ((null x)
+                       (setf start (1+ position)))
+                      ((consp x)
+                       (let ((bulk (cdr x)))
+                         (when (and bulk
+                                    (plusp (bulk-task-waiting bulk)))
+                           (return-from steal bulk))
+                         (setf (cdr x) nil))
+                       (when (cas (svref stacklet position) x nil)
+                         (incf start)))
+                      ((eql x (cas (svref stacklet position) x nil))
+                       (return-from steal x))))))))
 
 ;; bulk tasks are represented, on-stack as conses: the CAR is a hint
 ;; wrt where to start looking for subtasks, and the CDR is the bulk-task
@@ -97,34 +164,12 @@
            x))))
 
 (defun push (stack x &optional (hint 0))
-  (with-mutex ((stack-lock stack))
-    (vector-push-extend (bulk-task-hintify x hint)
-                        (stack-data stack))))
+  (%push stack (bulk-task-hintify x hint)))
 
 (defun push-all (stack values &optional (hint 0))
-  (with-mutex ((stack-lock stack))
-    (let ((data (stack-data stack)))
-      (map nil (lambda (x)
-                 (vector-push-extend (bulk-task-hintify x hint)
-                                     data))
-           values))))
-
-(defun steal (stack)
-  (with-mutex ((stack-lock stack))
-    (let ((data (stack-data stack)))
-      (loop for i below (length data)
-            for x = (aref data i)
-            do (when (consp x)
-                 (setf x (cdr x)))
-               (etypecase x
-                 (null)
-                 ((or symbol function task)
-                  (shiftf (aref data i) nil)
-                  (return x))
-                 (bulk-task
-                  (if (plusp (bulk-task-waiting x))
-                      (return x)
-                      (setf (aref data i) nil))))))))
+  (map nil (lambda (x)
+             (%push stack (bulk-task-hintify x hint)))
+       values))
 
 (declaim (inline bulk-find-task))
 (defun bulk-find-task (hint-and-bulk)
@@ -158,33 +203,41 @@
                  (setf begin 0
                        end   hint))))))))
 
-(defun get-one-task (stack)
-  (with-mutex ((stack-lock stack))
-    (let ((data (stack-data stack)))
-      (loop
-        (let* ((index (position nil data :from-end t
-                                         :test-not #'eql))
-               (task  (and index (aref data index))))
-          (flet ((clear ()
-                   (setf (aref data index)   nil
-                         (fill-pointer data) index)))
-            (declare (inline clear))
-            (etypecase task
-              (null
-               (setf (fill-pointer data) 0)
+(defun pop-one-task (stack)
+  (declare (type stack stack))
+  (loop
+    (when (zerop (stack-top stack))
+      (return nil))
+    (multiple-value-bind (major minor) (split-index (stack-top stack))
+      (let* ((stacklets (stack-stacklets stack))
+             (stacklet  (aref stacklets major))
+             (position  (position nil stacklet :from-end t :end minor :test-not #'eql)))
+        (cond (position
+               (setf (stack-top stack) (+ (* major +stacklet-size+)
+                                          position))
+               (let ((x (aref stacklet position)))
+                 (etypecase x
+                   (null)
+                   (cons
+                    (let ((bulk-task (cdr x)))
+                      (when (and bulk-task
+                                 (plusp (bulk-task-waiting bulk-task)))
+                        (return x)))
+                    (setf (cdr x) nil
+                          (svref stacklet position) nil
+                          (stack-top stack) (+ (* major +stacklet-size+)
+                                               position)))
+                   ((or task symbol function)
+                    (when (eql (cas (svref stacklet position) x nil) x)
+                      (return x))))))
+              ((zerop major)
+               (setf (stack-top stack) 0)
                (return nil))
-              (cons
-               (let ((bulk-task (cdr task)))
-                 (when (and bulk-task
-                            (plusp (bulk-task-waiting bulk-task)))
-                   (return task))
-                 (clear)))
-              ((or task symbol function)
-               (clear)
-               (return task)))))))))
+              (t
+               (setf (stack-top stack) (* major +stacklet-size+))))))))
 
 (defun run-one (stack)
-  (let ((task (get-one-task stack))
+  (let ((task (pop-one-task stack))
         subtask)
     (cond ((not task) nil)
           ((atom task)
