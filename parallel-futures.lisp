@@ -25,8 +25,12 @@
 (defvar *context* (work-queue:make 2 nil :bindings `((*context* . ,#'work-queue:current-queue))))
 
 (defmacro with-context ((count) &body body)
-  `(let ((*context* (work-queue:make ,count nil :bindings `((*context* . ,#'work-queue:current-queue)))))
-     ,@body))
+  (let ((context (gensym "CONTEXT")))
+    `(let* ((,context  (work-queue:make ,count nil :bindings `((*context* . ,#'work-queue:current-queue))))
+            (*context* ,context))
+       (unwind-protect (progn
+                         ,@body)
+         (work-queue:stop ,context)))))
 
 (defstruct (future
             (:include future:future))
