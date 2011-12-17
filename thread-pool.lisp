@@ -62,6 +62,7 @@
           (return-from grab-task task))))))
 
 (defvar *worker-id* nil)
+(defvar *worker-hint* 0)
 (defvar *current-queue* nil)
 
 (defun %make-worker (wqueue i)
@@ -70,10 +71,11 @@
          (state  (queue-state  wqueue))
          (queue  (queue-queue  wqueue))
          (stacks (queue-stacks wqueue))
+         (nthread (queue-nthread wqueue))
          (stack  (aref stacks i))
-         (hint   (float (/ i (queue-nthread wqueue)) 1d0)))
+         (hint   (float (/ i nthread) 1d0)))
     (make-thread
-     (lambda (&aux (*worker-id* i) (*current-queue* wqueue))
+     (lambda (&aux (*worker-id* i) (*current-queue* wqueue) (*worker-hint* hint))
        (loop named outer do
          (let* ((timeout 1e-4)
                 (task
@@ -93,7 +95,7 @@
                (work-stack:push stack task hint)
                (work-stack:execute-task task))
            (loop while (work-stack:run-one stack)))))
-     :name "Work queue worker")))
+     :name (format nil "Work queue worker ~A/~A" i nthread))))
 
 (defun make (nthread &optional constructor &rest arguments)
   (declare (type (and unsigned-byte fixnum) nthread)
@@ -167,7 +169,7 @@
     (cond (id
            (assert (eql (aref (queue-threads queue) id)
                         *current-thread*))
-           (work-stack:push (aref (queue-stacks queue) id) task))
+           (work-stack:push (aref (queue-stacks queue) id) task *worker-hint*))
           (t
            (enqueue task queue)))))
 
@@ -178,6 +180,6 @@
     (cond (id
            (assert (eql (aref (queue-threads queue) id)
                         *current-thread*))
-           (work-stack:push-all (aref (queue-stacks queue) id) tasks))
+           (work-stack:push-all (aref (queue-stacks queue) id) tasks *worker-hint*))
           (t
            (enqueue-all tasks queue)))))
