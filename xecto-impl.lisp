@@ -102,3 +102,13 @@
                               (xecto-offset xecto)))))
     (vector-future:retain (xecto-data new))
     (set-finalizer new)))
+
+#||
+(defparameter *x* (make-xecto '(2048 2048) :initial-element 1))
+(defparameter *y* (transpose (make-xecto '(2048 2048) :initial-element 1) 0 1))
+
+(gc :full t)
+(time (let ((x (map-xecto #'+ *x* *y*))
+            (y (scan-xecto #'+ *y*)))
+        (wait (reduce-xecto #'+ (map-xecto #'+ x y)) :done)))
+||#
