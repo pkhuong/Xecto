@@ -64,20 +64,25 @@
     (release data)
     (map nil #'release dependencies)))
 
-(defun make (allocation dependencies &rest tasks)
-  (declare (dynamic-extent tasks))
+(defun make (allocation dependencies tasks
+             &optional constructor
+             &rest     arguments)
+  (declare (dynamic-extent arguments))
   (let ((size (if (vector-future-p allocation)
                   (vector-future-size allocation)
                   allocation)))
-    (parallel-future:make (if (vector-future-p allocation)
-                              (adjoin allocation dependencies)
-                              dependencies)
-                          (make-allocator allocation)
-                          tasks
-                          (make-deallocator dependencies)
-                          #'make-vector-future
-                          :size     size
-                          :refcount 1)))
+    (apply 'parallel-future:make
+           (coerce (if (vector-future-p allocation)
+                       (adjoin allocation dependencies)
+                       dependencies)
+                   'simple-vector) 
+           (make-allocator allocation)
+           (coerce tasks 'simple-vector)
+           (make-deallocator dependencies)
+           (or constructor #'make-vector-future)
+           :size     size
+           :refcount 1
+           arguments)))
 
 #||
 ;; demo
@@ -86,27 +91,27 @@
   (let* ((args (list x y))
          (size (min (vector-future-size x)
                     (vector-future-size y))))
-    (apply 'make size args
-           (loop with step = (max 1 (round size 16))
-                 for i from 0 below size by step
-                 collect
-                 (let ((end (min size (+ i step)))
-                       (start i))
-                   (lambda (data)
-                     (let ((r (vector-future-data data))
-                           (x (vector-future-data x))
-                           (y (vector-future-data y)))
-                       (declare (type (simple-array double-float 1) r x y))
-                       (loop for i from start below end
-                             do (setf (aref r i)
-                                      (funcall fun (aref x i) (aref y i)))))))))))
+    (make size args
+          (loop with step = (max 1 (round size 16))
+                for i from 0 below size by step
+                collect
+                (let ((end (min size (+ i step)))
+                      (start i))
+                  (lambda (data)
+                    (let ((r (vector-future-data data))
+                          (x (vector-future-data x))
+                          (y (vector-future-data y)))
+                      (declare (type (simple-array double-float 1) r x y))
+                      (loop for i from start below end
+                            do (setf (aref r i)
+                                     (funcall fun (aref x i) (aref y i)))))))))))
 
 (defun test (n)
-  (let* ((src (make n '()))
+  (let* ((src (make n '() '()))
          (one (pmap (lambda (x y) x y
                       1d0)
                     src src))
-         (two (pmap (lambda (x y)
+         (two (pmap (lambda (x y) x y
                       2d0)
                     src src))
          (three (pmap #'+ one two))
@@ -114,13 +119,13 @@
     (release src)
     (release one)
     (release two)
-    (wait two :done)
+    (future:wait two :done)
     (format t "rc: ~A ~A~%"
             (vector-future-refcount two)
-            (status two))
+            (future:status two))
     (sleep 1)
-    (wait three :done)
-    (wait four :done)
+    (future:wait three :done)
+    (future:wait four :done)
     (format t "rc: ~A~%" (vector-future-refcount two))
     (values src one two three four)))
 ||#
