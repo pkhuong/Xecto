@@ -14,7 +14,7 @@
                       arg))))
 
 (defun compute-reduce-tasks (function spine pattern arg)
-  (let ((tasks '())
+  (let ((tasks (make-array 16 :fill-pointer 0 :adjustable t))
         (data  (xecto-data arg)))
     (destructuring-bind (offsets . loop) pattern
       (declare (type (simple-array index (2)) offsets)
@@ -24,11 +24,12 @@
              (declare (type (simple-array index (2)) offsets))
              (let ((offsets (copy-seq offsets)))
                (if (= depth (length loop))
-                   (push (let ((offsets (copy-seq offsets)))
-                           (lambda (dst)
-                             (execute-subreduce dst function spine
-                                                offsets data)))
-                         tasks)
+                   (vector-push-extend
+                    (let ((offsets (copy-seq offsets)))
+                      (lambda (dst)
+                        (execute-subreduce dst function spine
+                                           offsets data)))
+                    tasks)
                    (destructuring-bind (trip . strides) (aref loop depth)
                      (declare (type (simple-array fixnum (2)) strides))
                      (loop repeat trip do
@@ -36,7 +37,7 @@
                        (map-into offsets #'+
                                  offsets strides)))))))
         (rec 0 offsets)))
-    (nreverse tasks)))
+    (nreverse (coerce tasks 'simple-vector))))
 
 (defun execute-subreduce (destination function spine offsets arg)
   (declare (type vector-future:vector-future destination arg)
@@ -61,8 +62,7 @@
 
 (defun execute-reduce (fun r-size r-shape spine pattern arg)
   (let* ((tasks (compute-reduce-tasks fun spine pattern arg))
-         (data  (apply 'vector-future:make
-                       r-size
-                       (list (xecto-data arg))
-                       tasks)))
+         (data  (vector-future:make r-size
+                                    (list (xecto-data arg))
+                                    tasks)))
     (%make-xecto r-shape data)))

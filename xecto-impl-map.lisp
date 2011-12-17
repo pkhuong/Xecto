@@ -24,7 +24,7 @@
 (defvar *max-inner-loop-count* (ash 1 16))
 
 (defun compute-map-tasks (function pattern &rest arguments)
-  (let ((tasks '())
+  (let ((tasks (make-array 16 :fill-pointer 0 :adjustable t))
         (data  (map 'simple-vector #'xecto-data arguments))
         (max-count *max-inner-loop-count*))
     (destructuring-bind (offsets . loop) pattern
@@ -40,7 +40,7 @@
                            do (let* ((start i)
                                      (count (min max-count
                                                  (- trip start))))
-                                (push
+                                (vector-push-extend
                                  (let ((offsets (copy-seq offsets))
                                        (loop    (cons count
                                                       strides)))
@@ -59,7 +59,7 @@
                        (map-into offsets #'+
                                  offsets strides)))))))
         (rec 0 offsets)))
-    (nreverse tasks)))
+    (nreverse (coerce tasks 'simple-vector))))
 
 (defun execute-submap (destination function offsets loop arguments)
   (declare (type vector-future:vector-future destination)
@@ -95,8 +95,7 @@
                     pattern
                     &rest args)
   (let* ((tasks (apply 'compute-map-tasks fun pattern args))
-         (data (apply 'vector-future:make
-                      r-size
-                      (mapcar #'xecto-data args)
-                      tasks)))
+         (data (vector-future:make r-size
+                                   (mapcar #'xecto-data args)
+                                   tasks)))
     (%make-xecto r-shape data)))

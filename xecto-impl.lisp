@@ -82,7 +82,7 @@
 (defun make-xecto (dimensions &key initial-element)
   (multiple-value-bind (size shape)
       (size-and-shape dimensions)
-    (let ((xecto (%make-xecto shape (vector-future:make size '()))))
+    (let ((xecto (%make-xecto shape (vector-future:make size '() #()))))
       (set-finalizer xecto)
       (when initial-element
         (future:wait (xecto-data xecto) :done)
