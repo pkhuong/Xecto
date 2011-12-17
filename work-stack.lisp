@@ -15,13 +15,14 @@
                              :read-only t))
 
 (defstruct (bulk-task
-            (:include task)
             (:constructor nil))
   ;; count waiting to be executed
   (waiting   (error "Missing arg") :type word)
   ;; count not done yet
   (remaining (error "Missing arg") :type word)
   (subtasks  (error "Missing arg") :type (simple-array (or symbol function) 1)
+                                   :read-only t)
+  (cleanup   nil                   :type (or list function)
                                    :read-only t))
 
 (deftype task-designator ()
@@ -51,11 +52,13 @@
 (defun p (x)
   (stack-p x))
 
+(declaim (inline bulk-task-hintify))
 (defun bulk-task-hintify (x &optional (hint 0))
-  (if (bulk-task-p x)
-      (cons (truncate (* hint (length (bulk-task-subtasks x))))
-            x)
-      x))
+  (etypecase x
+    ((or function symbol task) x)
+    (bulk-task
+     (cons (truncate (* hint (length (bulk-task-subtasks x))))
+           x))))
 
 (defun push (stack x &optional (hint 0))
   (with-mutex ((stack-lock stack))
@@ -77,38 +80,43 @@
             for x = (aref data i)
             do (when (consp x)
                  (setf x (cdr x)))
-               (cond ((null x))
-                     ((not (bulk-task-p x))
-                      (shiftf (aref data i) nil)
-                      (return x))
-                     ((plusp (bulk-task-waiting x))
-                      (return x))
-                     (t
-                      (setf (aref data i) nil)))))))
+               (etypecase x
+                 (null)
+                 ((or symbol function task)
+                  (shiftf (aref data i) nil)
+                  (return x))
+                 (bulk-task
+                  (if (plusp (bulk-task-waiting x))
+                      (return x)
+                      (setf (aref data i) nil))))))))
 
+(declaim (inline bulk-find-task))
 (defun bulk-find-task (hint-and-bulk)
   (declare (type cons hint-and-bulk))
   (destructuring-bind (hint . bulk) hint-and-bulk
     (declare (type fixnum hint)
              (type bulk-task bulk))
-    (let ((subtasks (bulk-task-subtasks bulk)))
+    (let* ((subtasks (bulk-task-subtasks bulk))
+           (begin    hint)
+           (end      (length subtasks)))
       (loop
         (when (zerop (bulk-task-waiting bulk))
           (return (values nil nil)))
-        (let ((index (position nil subtasks :start hint :test-not #'eql)))
+        (let ((index (position nil subtasks :start begin :end end :test-not #'eql)))
           (cond (index
+                 (setf begin (1+ index))
                  (let ((x (aref subtasks index)))
                    (when (eql (cas (svref subtasks index) x nil)
                               x)
                      (atomic-decf (bulk-task-waiting bulk))
-                     (setf (car hint-and-bulk) index)
-                     (return (values x index)))
-                   (setf hint index)))
-                ((zerop hint)
+                     (setf (car hint-and-bulk) begin)
+                     (return (values x index)))))
+                ((zerop begin)
                  (setf (car hint-and-bulk) 0)
                  (return (values nil nil)))
                 (t
-                 (setf hint 0))))))))
+                 (setf begin 0
+                       end   hint))))))))
 
 (defun run-one (stack)
   (with-mutex ((stack-lock stack))
@@ -117,26 +125,35 @@
        (let* ((index (position nil data :from-end t
                                         :test-not #'eql))
               (task  (and index (aref data index))))
-         (etypecase task
-           (null
-            (setf (fill-pointer data) 0)
-            (return nil))
-           (cons
-            (multiple-value-bind (subtask index)
-                (bulk-find-task task)
-              (if subtask
-                  (let ((bulk-task (cdr task)))
-                    (funcall subtask bulk-task)
-                    (when (= (atomic-decf (bulk-task-remaining bulk-task))
-                             1)
-                      (funcall (bulk-task-fun bulk-task) bulk-task))
-                    (return t))
+         (flet ((clear ()
                   (setf (aref data index)   nil
-                        (fill-pointer data) index))))
-           ((or task symbol function)
-            (setf (aref data index) nil
-                  (fill-pointer data) index)
-            (if (task-p task)
-                (funcall (task-fun task) task)
-                (funcall task))
-            (return t))))))))
+                        (fill-pointer data) index)))
+           (declare (inline clear))
+           (etypecase task
+             (null
+              (setf (fill-pointer data) 0)
+              (return nil))
+             (cons
+              (let ((subtask (bulk-find-task task)))
+                (if subtask
+                    (let ((bulk-task (cdr task)))
+                      (funcall subtask bulk-task)
+                      (when (= (atomic-decf (bulk-task-remaining bulk-task))
+                               1)
+                        (let ((cleanup (bulk-task-cleanup bulk-task)))
+                          (etypecase cleanup
+                            (null)
+                            (cons
+                             (dolist (cleanup cleanup)
+                               (funcall cleanup bulk-task)))
+                            ((or function symbol)
+                             (funcall cleanup bulk-task))))
+                        (clear))
+                      (return t))
+                    (clear))))
+             ((or task symbol function)
+              (clear)
+              (if (task-p task)
+                  (funcall (task-fun task) task)
+                  (funcall task))
+              (return t)))))))))
