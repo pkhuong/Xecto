@@ -22,11 +22,11 @@
 
 (in-package "PARALLEL-FUTURE")
 
-(defvar *context* (work-queue:make 2 nil :bindings `((*context* . ,#'work-queue:current-queue))))
+(defvar *context* (work-queue:make 2))
 
 (defmacro with-context ((count) &body body)
   (let ((context (gensym "CONTEXT")))
-    `(let* ((,context  (work-queue:make ,count nil :bindings `((*context* . ,#'work-queue:current-queue))))
+    `(let* ((,context  (work-queue:make ,count))
             (*context* ,context))
        (unwind-protect (progn
                          ,@body)
@@ -63,7 +63,8 @@
               (map-list-designator (future-cleanup future) future)
               (setf (future-cleanup future) nil))
              (t (error "Mu?"))))
-     *context*)))
+     (or (work-queue:current-queue)
+         *context*))))
 
 (defun make (dependencies setup subtasks cleanup &optional constructor &rest arguments)
   (declare (type simple-vector dependencies subtasks))

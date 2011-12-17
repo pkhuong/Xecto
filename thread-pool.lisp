@@ -67,7 +67,8 @@
 (defvar *current-queue* nil)
 
 (defun current-queue ()
-  (the queue *current-queue*))
+  (and *current-queue*
+       (weak-pointer-value *current-queue*)))
 
 (defun %make-worker (wqueue i &optional binding-names binding-compute)
   (let* ((lock   (queue-lock   wqueue))
@@ -77,9 +78,10 @@
          (stacks (queue-stacks wqueue))
          (nthread (queue-nthread wqueue))
          (stack  (aref stacks i))
-         (hint   (float (/ i nthread) 1d0)))
+         (hint   (float (/ i nthread) 1d0))
+         (weak-queue (make-weak-pointer wqueue)))
     (make-thread
-     (lambda (&aux (*worker-id* i) (*current-queue* wqueue) (*worker-hint* hint))
+     (lambda (&aux (*worker-id* i) (*current-queue* weak-queue) (*worker-hint* hint))
        (progv binding-names (mapcar (lambda (x)
                                       (if (functionp x) (funcall x) x))
                                     binding-compute)
@@ -96,12 +98,16 @@
                         (unless (condition-wait cvar lock :timeout timeout)
                           (grab-mutex lock))
                         (when (< timeout 1e0)
-                          (setf timeout (* timeout 2)))))))
+                          (setf timeout (* timeout 2))))))
+                  (queue (weak-pointer-value weak-queue)))
              (declare (type single-float timeout))
+             (unless queue
+               (return-from outer))
              (if (bulk-task-p task)
                  (work-stack:push stack task hint)
                  (work-stack:execute-task task))
-             (loop while (work-stack:run-one stack))))))
+             (loop while (work-stack:run-one stack))
+             (setf queue nil)))))
      :name (format nil "Work queue worker ~A/~A" i nthread))))
 
 (defun make (nthread &optional constructor &rest arguments)
