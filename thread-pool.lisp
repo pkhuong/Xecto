@@ -31,9 +31,8 @@
 (in-package "WORK-QUEUE")
 
 (defstruct (queue
-            (:constructor %make-queue
-                (nthread state queue stacks threads)))
-  (lock    (make-mutex)  :type mutex
+            (:constructor %make-queue))
+  (locks   (error "foo") :type (simple-array mutex 1)
                          :read-only t)
   (cvar    (make-waitqueue) :type waitqueue
                          :read-only t)
@@ -90,10 +89,10 @@
           (try)
           (unless (condition-wait cvar lock :timeout timeout)
             (grab-mutex lock))
-          (setf timeout (min 1.0 (* timeout 1.5))))))))
+          (setf timeout (min 1.0 (* timeout 1.1))))))))
 
 (defun %make-worker (wqueue i &optional binding-names binding-compute)
-  (let* ((lock   (queue-lock   wqueue))
+  (let* ((locks  (queue-locks  wqueue))
          (cvar   (queue-cvar   wqueue))
          (state  (queue-state  wqueue))
          (queue  (queue-queue  wqueue))
@@ -108,7 +107,8 @@
                                       (if (functionp x) (funcall x) x))
                                     binding-compute)
          (loop named outer do
-           (let ((task  (loop-get-task state lock cvar queue stacks i))
+           (let ((task  (loop-get-task state (aref locks i) cvar
+                                       queue stacks i))
                  (queue (weak-pointer-value weak-queue)))
              (unless (and task queue)
                (return-from outer))
@@ -122,36 +122,25 @@
 (defun make (nthread &optional constructor &rest arguments)
   (declare (type (and unsigned-byte fixnum) nthread)
            (dynamic-extent arguments))
-  (let* ((state   (list :running))
-         (queue   (sb-queue:make-queue))
-         (stacks  (map-into (make-array nthread) #'work-stack:make))
-         (threads (make-array nthread))
+  (let* ((threads (make-array nthread))
          (default-bindings (getf arguments :bindings))
          (arguments (loop for (key value) on arguments by #'cddr
                           unless (eql key :bindings)
                             nconc (list key value)))
-         (wqueue  (if constructor
-                      (apply constructor
-                             :lock    (make-mutex)
-                             :cvar    (make-waitqueue)
-                             :nthread nthread
-                             :state   state
-                             :queue   queue
-                             :stacks  stacks
-                             :threads threads
-                             arguments)
-                      (%make-queue nthread
-                                   state
-                                   queue
-                                   stacks
-                                   threads))))
-    (finalize wqueue (let ((lock  (queue-lock  wqueue))
-                           (cvar  (queue-cvar  wqueue))
+         (wqueue  (apply (or constructor #'%make-queue)
+                         :locks   (map-into (make-array nthread) #'make-mutex)
+                         :cvar    (make-waitqueue)
+                         :nthread nthread
+                         :state   (list :running)
+                         :queue   (sb-queue:make-queue)
+                         :stacks  (map-into (make-array nthread) #'work-stack:make)
+                         :threads threads
+                         arguments)))
+    (finalize wqueue (let ((cvar  (queue-cvar  wqueue))
                            (state (queue-state wqueue)))
                       (lambda ()
-                        (with-mutex (lock)
-                          (setf (car state) :done)
-                          (condition-broadcast cvar)))))
+                        (setf (car state) :done)
+                        (condition-broadcast cvar))))
     (let ((binding-names (mapcar #'car default-bindings))
           (binding-values (mapcar #'cdr default-bindings)))
       (dotimes (i nthread wqueue)
@@ -160,9 +149,8 @@
 
 (defun stop (queue)
   (declare (type queue queue))
-  (with-mutex ((queue-lock queue))
-    (setf (car (queue-state queue)) :done)
-    (condition-broadcast (queue-cvar queue)))
+  (setf (car (queue-state queue)) :done)
+  (condition-broadcast (queue-cvar queue))
   nil)
 
 (defun alive-p (queue)
@@ -172,21 +160,19 @@
 (defun enqueue (task &optional (queue (current-queue)))
   (declare (type task-designator task)
            (type queue queue))
-  (with-mutex ((queue-lock queue))
-    (assert (alive-p queue))
-    (sb-queue:enqueue task (queue-queue queue))
-    (condition-broadcast (queue-cvar queue)))
+  (assert (alive-p queue))
+  (sb-queue:enqueue task (queue-queue queue))
+  (condition-broadcast (queue-cvar queue))
   nil)
 
 (defun enqueue-all (tasks &optional (queue (current-queue)))
   (declare (type queue queue))
-  (with-mutex ((queue-lock queue))
-    (assert (alive-p queue))
-    (let ((queue (queue-queue queue)))
-      (map nil (lambda (task)
-                 (sb-queue:enqueue task queue))
-           tasks))
-    (condition-broadcast (queue-cvar queue)))
+  (assert (alive-p queue))
+  (let ((queue (queue-queue queue)))
+    (map nil (lambda (task)
+               (sb-queue:enqueue task queue))
+         tasks))
+  (condition-broadcast (queue-cvar queue))
   nil)
 
 (defun push-self (task &optional (queue (current-queue)))
