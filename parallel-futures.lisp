@@ -53,11 +53,12 @@
     (work-queue:push-self
      (lambda ()
        (map-list-designator setup future)
-       (cond ((plusp (future-remaining future))
+       (cond ((plusp (future-waiting future))
               (work-queue:push-self future))
-             (t
+             ((zerop (future-remaining future))
               (map-list-designator (future-cleanup future) future)
-              (setf (future-cleanup future) nil))))
+              (setf (future-cleanup future) nil))
+             (t (error "Mu?"))))
      *context*)))
 
 (defun make (dependencies setup subtasks cleanup &optional constructor &rest arguments)
