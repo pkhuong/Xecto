@@ -73,4 +73,4 @@
                                              (list cleanup #'future:mark-done))
                               arguments)))
     (future:mark-dependencies future)
-    future))
+    (future:thaw future)))

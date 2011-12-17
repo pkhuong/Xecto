@@ -173,10 +173,9 @@
                 (when recursive
                   (map nil #'rec (future-dependencies future)))
                 (when (zerop (future-depcount future))
-                  (execute future))
-                t)
-               (otherwise nil))))
-    (rec future)))
+                  (execute future))))))
+    (rec future))
+  future)
 
 (defun mark-dependencies (future &key (thaw t) (recursive nil))
   (declare (type future future))
