@@ -58,7 +58,7 @@
   (remaining (error "Missing arg") :type word)
   (subtasks  (error "Missing arg") :type (simple-array (or symbol function) 1)
                                    :read-only t)
-  (cleanup   nil                   :type (or list function)
+  (cleanup   nil                   :type (or list symbol function)
                                    :read-only t))
 
 (deftype task-designator ()
