@@ -53,9 +53,11 @@
     (work-queue:push-self
      (lambda ()
        (map-list-designator setup future)
-       (if (plusp (future-remaining future))
-           (work-queue:push-self future)
-           (map-list-designator (future-cleanup future) future)))
+       (cond ((plusp (future-remaining future))
+              (work-queue:push-self future))
+             (t
+              (map-list-designator (future-cleanup future) future)
+              (setf (future-cleanup future) nil))))
      *context*)))
 
 (defun make (dependencies setup subtasks cleanup &optional constructor &rest arguments)
