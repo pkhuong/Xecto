@@ -1,66 +1,20 @@
 (defpackage "WORK-QUEUE"
   (:use "CL" "SB-EXT" "SB-THREAD")
   (:export "MAKE" "P" "QUEUE" "ALIVE-P"
-           "TASK" "TASK-HASH" "TASK-FUN" "HASH" "FUN"
+           "TASK" "TASK-P" "TASK-FUN" "BULK-TASK" "BULK-TASK-P" "TASK-DESIGNATOR"
            "ENQUEUE" "ENQUEUE-ALL" "STOP"
            "PUSH-SELF" "PUSH-SELF-ALL")
+  (:import-from "WORK-STACK"
+                "TASK" "TASK-P" "TASK-FUN"
+                "BULK-TASK" "BULK-TASK-P"
+                "TASK-DESIGNATOR")
   (:nicknames "WQ"))
 
 (in-package "WORK-QUEUE")
 
-(defglobal **hash-state** (make-random-state t))
-(defglobal **hash-lock**  (make-mutex :name "WORK-QUEUE HASH-LOCK"))
-
-(defun get-task-hash (task)
-  (or (task-hash task)
-      (with-mutex (**hash-lock**)
-        (random (1+ most-positive-fixnum) **hash-state**))))
-
-(defstruct (task
-            (:constructor nil))
-  (hash nil :type (or null (and unsigned-byte fixnum))
-            :read-only t)
-  (fun  nil :type (or symbol function)
-            :read-only t))
-
-(defstruct stack
-  (lock   (make-mutex) :type mutex
-                       :read-only t)
-  (data   (make-array 32 :fill-pointer 0 :adjustable t)
-                       :type (and (not simple-vector)
-                                  vector)
-                       :read-only t))
-
-(defun stack-push (stack x)
-  (with-mutex ((stack-lock stack))
-    (vector-push-extend x (stack-data stack))))
-
-(defun stack-push-all (stack values)
-  (with-mutex ((stack-lock stack))
-    (let ((data (stack-data stack)))
-      (map nil (lambda (x)
-                 (vector-push-extend x data))
-           values))))
-
-(defun stack-pop (stack)
-  (with-mutex ((stack-lock stack))
-    (let* ((data  (stack-data stack))
-           (index (position nil data :from-end t :test-not #'eql)))
-      (prog1 (and index
-                  (shiftf (aref data index) nil))
-        (setf (fill-pointer data) (or index 0))))))
-
-(defun stack-steal (stack)
-  (with-mutex ((stack-lock stack))
-    ;; todo: hash for affinity
-    (let* ((data  (stack-data stack))
-           (index (position nil data :test-not #'eql)))
-      (and index
-           (shiftf (aref data index) nil)))))
-
 (defstruct (queue
             (:constructor %make-queue
-                (nthread state queues stacks threads)))
+                (nthread state queue stacks threads)))
   (lock    (make-mutex)  :type mutex
                          :read-only t)
   (cvar    (make-waitqueue) :type waitqueue
@@ -69,9 +23,8 @@
                          :read-only t)
   (state   (error "foo") :type cons
                          :read-only t)
-  (queues  (error "Foo") :type (simple-array mpsc-queue:queue 1)
-                         :read-only t)
-  (stacks  (error "Foo") :type (simple-array stack 1)
+  (queue   (sb-queue:make-queue) :type sb-queue:queue)
+  (stacks  (error "Foo") :type (simple-array work-stack:stack 1)
                          :read-only t)
   (threads (error "Foo") :type (simple-array t 1)
                          :read-only t))
@@ -80,28 +33,25 @@
 (defun p (x)
   (queue-p x))
 
-(defun grab-task (queues stacks i)
-  (let ((n (length queues)))
-    (dotimes (j n)
-      (let* ((i    (mod (+ i j) n))
-             (task (mpsc-queue:get (aref queues i))))
-        (when task
-          (return-from grab-task task)))))
+(defun grab-task (queue stacks i)
+  (let ((task (sb-queue:dequeue queue)))
+    (when task
+      (return-from grab-task task)))
   (let ((n (length stacks)))
     (dotimes (j n)
       (let* ((i    (mod (+ i j) n))
-             (task (stack-steal (aref stacks i))))
+             (task (work-stack:steal (aref stacks i))))
         (when task
           (return-from grab-task task))))))
 
 (defvar *worker-id* nil)
 
-(defun %make-worker (queue i)
-  (let* ((lock   (queue-lock queue))
-         (cvar   (queue-cvar queue))
-         (state  (queue-state queue))
-         (queues (queue-queues queue))
-         (stacks (queue-stacks queue))
+(defun %make-worker (wqueue i)
+  (let* ((lock   (queue-lock   wqueue))
+         (cvar   (queue-cvar   wqueue))
+         (state  (queue-state  wqueue))
+         (queue  (queue-queue  wqueue))
+         (stacks (queue-stacks wqueue))
          (stack  (aref stacks i)))
     (make-thread
      (lambda (&aux (*worker-id* i))
@@ -111,50 +61,50 @@
                   (loop
                     (when (eql (car state) :done)
                       (return nil))
-                    (let ((task (grab-task queues stacks i)))
+                    (let ((task (grab-task queue stacks i)))
                       (when task
                         (return task)))
                     (condition-wait cvar lock)))))
           (unless task
             (return))
-          (stack-push stack task)
-          (loop for task = (stack-pop stack)
-                while task
-                do (funcall (task-fun task) task)))))
+          (if (bulk-task-p task)
+              (work-stack:push stack task)
+              (work-stack:execute-task task))
+          (loop while (work-stack:run-one stack)))))
      :name "Work queue worker")))
 
 (defun make (nthread &optional constructor &rest arguments)
   (declare (type (and unsigned-byte fixnum) nthread)
            (dynamic-extent arguments))
   (let* ((state   (list :running))
-         (queues  (map-into (make-array nthread) #'mpsc-queue:make))
-         (stacks  (map-into (make-array nthread) #'make-stack))
+         (queue   (sb-queue:make-queue))
+         (stacks  (map-into (make-array nthread) #'work-stack:make))
          (threads (make-array nthread))
-         (queue   (if constructor
+         (wqueue  (if constructor
                       (apply constructor
                              :lock    (make-mutex)
                              :cvar    (make-waitqueue)
                              :nthread nthread
                              :state   state
-                             :queues  queues
+                             :queue   queue
                              :stacks  stacks
                              :threads threads
                              arguments)
                       (%make-queue nthread
                                    state
-                                   queues
+                                   queue
                                    stacks
                                    threads))))
-    (finalize queue (let ((lock  (queue-lock queue))
-                          (cvar  (queue-cvar queue))
-                          (state (queue-state queue)))
+    (finalize wqueue (let ((lock  (queue-lock  wqueue))
+                           (cvar  (queue-cvar  wqueue))
+                           (state (queue-state wqueue)))
                       (lambda ()
                         (with-mutex (lock)
                           (setf (car state) :done)
                           (condition-broadcast cvar)))))
-    (dotimes (i nthread queue)
+    (dotimes (i nthread wqueue)
       (setf (aref threads i)
-            (%make-worker queue i)))))
+            (%make-worker wqueue i)))))
 
 (defun stop (queue)
   (declare (type queue queue))
@@ -172,8 +122,8 @@
            (type task  task))
   (with-mutex ((queue-lock queue))
     (assert (alive-p queue))
-    (let ((index (mod (get-task-hash task) (queue-nthread queue))))
-      (mpsc-queue:put (aref (queue-queues queue) index) task))
+    ;; FIXME
+    (sb-queue:enqueue task (queue-queue queue))
     (condition-broadcast (queue-cvar queue)))
   nil)
 
@@ -181,11 +131,9 @@
   (declare (type queue queue))
   (with-mutex ((queue-lock queue))
     (assert (alive-p queue))
-    (let ((nthread (queue-nthread queue))
-          (queues  (queue-queues  queue)))
+    (let ((queue   (queue-queue queue)))
       (map nil (lambda (task)
-                 (let ((index (mod (get-task-hash task) nthread)))
-                   (mpsc-queue:put (aref queues index) task)))
+                 (sb-queue:enqueue task queue))
            tasks))
     (condition-broadcast (queue-cvar queue)))
   nil)
@@ -198,7 +146,7 @@
     (cond (id
            (assert (eql (aref (queue-threads queue) id)
                         *current-thread*))
-           (stack-push (aref (queue-stacks queue) id) task))
+           (work-stack:push (aref (queue-stacks queue) id) task))
           (t
            (enqueue queue task)))))
 
@@ -209,7 +157,6 @@
     (cond (id
            (assert (eql (aref (queue-threads queue) id)
                         *current-thread*))
-           (let ((stack (aref (queue-stacks queue) id)))
-             (stack-push-all stack tasks)))
+           (work-stack:push-all (aref (queue-stacks queue) id) tasks))
           (t
            (enqueue-all queue tasks)))))

@@ -2,9 +2,11 @@
   :version "0.0.0"
   :licence "BSD"
   :description "Xecto is a simple parallel vector-processing library"
+  :depends-on ("sb-queue")
   :components
   ((:file "mpsc-queue")
-   (:file "thread-pool" :depends-on ("mpsc-queue"))
+   (:file "work-stack")
+   (:file "thread-pool" :depends-on ("work-stack"))
    (:file "futures")
    (:file "parallel-futures" :depends-on ("thread-pool" "futures"))
    (:file "vector-futures" :depends-on ("parallel-futures"))
