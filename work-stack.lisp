@@ -145,8 +145,9 @@
           (cond (index
                  (setf begin (1+ index))
                  (let ((x (aref subtasks index)))
-                   (when (eql (cas (svref subtasks index) x nil)
-                              x)
+                   (when (and x
+                              (eql (cas (svref subtasks index) x nil)
+                                   x))
                      (atomic-decf (bulk-task-waiting bulk))
                      (setf (car hint-and-bulk) begin)
                      (return x))))
