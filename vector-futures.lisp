@@ -42,6 +42,9 @@
 
 (defun release (future)
   (when (= 1 (atomic-decf (vector-future-refcount future)))
+    (let ((data (vector-future-data future)))
+      (when data
+        (sb-kernel:%shrink-vector data 0)))
     (setf (vector-future-data future) nil))
   nil)
 
@@ -52,8 +55,7 @@
      (lambda (data)
        (declare (type vector-future data))
        (retain data) ;; maybe we should just abort here...
-       (setf (vector-future-data data)
-             (make-array allocation :element-type 'double-float))
+       (setf (vector-future-data data) (make-array allocation :element-type 'double-float))
        nil))
     (vector-future
      (retain allocation)
