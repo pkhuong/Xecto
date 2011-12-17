@@ -1,6 +1,8 @@
 (defpackage "XECTO-IMPL"
   (:use "CL" "SB-EXT" "SB-THREAD"))
 
+;;; Internal primitive xecto stuff
+
 (in-package "XECTO-IMPL")
 
 ;; shape representation
