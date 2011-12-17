@@ -9,28 +9,39 @@
 
 ;;; Work-unit stack
 ;;;
-;;; Normal task-stealing stack, with special support for tasks composed of subtasks.
+;;; Normal task-stealing stack, with special support for tasks composed
+;;; of subtasks.
 ;;;
-;;; A task designator is either a function designator, a task, or a bulk-task.
+;;; A task designator is either a function designator, a task, or a
+;;; bulk-task.
 ;;;
-;;; A function designator is called, and a task's fun is called with the task as its
-;;; only argument.
+;;; A function designator is called, and a task's fun is called with the
+;;; task as its only argument.
 ;;;
-;;; When only those are used, the work stack is a normal stack of task units, with
-;;; PUSH to insert a new task (PUSH-ALL to insert a sequence of tasks), STEAL to get
-;;; one task from the bottom of the stack, and RUN-ONE to execute and pop the topmost
-;;; task.
+;;; When only those are used, the work stack is a normal stack of task
+;;; units, with PUSH to insert a new task (PUSH-ALL to insert a sequence
+;;; of tasks), STEAL to get one task from the bottom of the stack, and
+;;; RUN-ONE to execute and pop the topmost task.
 ;;;
-;;; Bulk-task objects represent a set of subtasks to be executed, and a sequence of
-;;; operations to perform once all the subtasks have been completed.
+;;; Bulk-task objects represent a set of subtasks to be executed, and
+;;; a sequence of operations to perform once all the subtasks have been
+;;; completed.
 ;;;
-;;; Task stealing of bulk tasks is special: bulk tasks have multiple owners, so bulk
-;;; tasks aren't stolen as much as forcibly shared.  All the workers that share a bulk
-;;; task cooperate to complete the subtasks.  The last worker to finish executing a
-;;; subtask then executes the cleanups.
+;;; Task stealing of bulk tasks is special: bulk tasks have multiple
+;;; owners, so bulk tasks aren't stolen as much as forcibly shared.  All
+;;; the workers that share a bulk task cooperate to complete the subtasks;
+;;; the last worker to finish executing a subtask then executes the
+;;; cleanups.
 ;;;
-;;; Subtasks and cleanups are functions that are called with the subtask as their one
-;;; argument.
+;;; Subtasks and cleanups are functions that are called with the
+;;; subtask as their one argument.
+;;;
+;;; Cooperating threads avoid hammering the same subtasks by
+;;; beginning/resuming their search for remaining subtasks from different
+;;; indices: PUSH/PUSH-ALL take an optional argument to determine the
+;;; fraction of the subtask vector from which to initialise the thread's
+;;; search (defaults to 0).  Incidentally, this is also useful for
+;;; locality, when the subtasks are sorted right.
 
 (in-package "WORK-STACK")
 
@@ -80,6 +91,7 @@
 ;; object.  When we're done with the bulk-task, the CDR is NIL.
 (declaim (inline bulk-task-hintify))
 (defun bulk-task-hintify (x &optional (hint 0))
+  (declare (type (real 0 1) hint))
   (etypecase x
     ((or function symbol task) x)
     (bulk-task
