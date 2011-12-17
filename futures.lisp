@@ -1,17 +1,17 @@
 (defpackage "FUTURE"
   (:use "CL" "SB-EXT" "SB-THREAD")
-  (:export "FUTURE" "FUN"
+  (:export "FUTURE" "TASK-FUTURE" "BULK-FUTURE"
            "DEPENDENTS"
            "STATUS" "WAIT" "CANCEL"
            "MARK-DEPENDENCIES" "MARK-DONE"))
 
 (in-package "FUTURE")
 (deftype status ()
-  '(member :waiting :running :done :cancelled))
+  '(member :frozen :waiting :running :done :cancelled))
 
 (defstruct (slow-status
             (:constructor
-                make-slow-status (&optional (status :waiting))))
+                make-slow-status (&optional (status :frozen))))
   (status :waiting         :type status)
   (lock   (make-mutex)     :type mutex
                            :read-only t)
@@ -19,11 +19,11 @@
                            :read-only t))
 
 (defstruct (future
+            (:include work-stack:bulk-task)
             (:constructor nil))
-  (fun          nil :type (or symbol function))
   (antideps     nil :type (or list (member :done :cancelled)))
   (waitcount      0 :type word)
-  (%status :waiting :type (or status slow-status)))
+  (%status  :frozen :type (or status slow-status)))
 
 (defun dependents (future)
   (let ((antideps (future-antideps future)))

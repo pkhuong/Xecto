@@ -75,6 +75,9 @@
 (defun p (x)
   (stack-p x))
 
+;; bulk tasks are represented, on-stack as conses: the CAR is a hint
+;; wrt where to start looking for subtasks, and the CDR is the bulk-task
+;; object.  When we're done with the bulk-task, the CDR is NIL.
 (declaim (inline bulk-task-hintify))
 (defun bulk-task-hintify (x &optional (hint 0))
   (etypecase x
@@ -181,6 +184,7 @@
              (funcall subtask bulk-task)
              (when (= (atomic-decf (bulk-task-remaining bulk-task))
                       1)
+               (setf (cdr task) nil)
                (let ((cleanup (bulk-task-cleanup bulk-task)))
                  (etypecase cleanup
                    (null)

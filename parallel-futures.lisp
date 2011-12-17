@@ -19,11 +19,7 @@
                               &aux (left-count (length units))))
             (:include future:future))
   (context *context* :type wq:queue      :read-only t)
-  (dependencies  nil :type simple-vector :read-only t)
-  (before        nil :type function      :read-only t)
-  (units         nil :type simple-vector :read-only t)
-  (left-count      0 :type word)
-  (after         nil :type function      :read-only t))
+  (dependencies  nil :type simple-vector :read-only t))
 
 (declaim (inline p))
 (defun p (x)
