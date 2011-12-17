@@ -84,7 +84,8 @@
                       (let ((task (grab-task queue stacks i)))
                         (when task
                           (return task)))
-                      (condition-wait cvar lock :timeout timeout)
+                      (unless (condition-wait cvar lock :timeout timeout)
+                        (grab-mutex lock))
                       (when (< timeout 1e0)
                         (setf timeout (* timeout 2)))))))
            (declare (type single-float timeout))
@@ -168,7 +169,7 @@
                         *current-thread*))
            (work-stack:push (aref (queue-stacks queue) id) task))
           (t
-           (enqueue queue task)))))
+           (enqueue task queue)))))
 
 (defun push-self-all (tasks &optional (queue *current-queue*))
   (declare (type queue queue))
@@ -179,4 +180,4 @@
                         *current-thread*))
            (work-stack:push-all (aref (queue-stacks queue) id) tasks))
           (t
-           (enqueue-all queue tasks)))))
+           (enqueue-all tasks queue)))))
