@@ -4,84 +4,73 @@
            "FUTURE" "P"
            "MAKE"))
 
+;;; Parallel futures: hooking up futures with the work queue
+;;;
+;;; A parallel is a future with an execution in three periods:
+;;;  - a list designator of setup functions
+;;;  - a vector of subtasks to execute in parallel
+;;;  - a list designator of cleanup functions
+;;;
+;;; When a parallel future is ready for execution, a task that
+;;; executes the setup functions and pushes the subtasks to
+;;; the local stack is created.  That task is enqueued or pushed
+;;; to the local stack.
+;;; Once the setup functions have been executed, the subtasks are
+;;; pushed as a bulk-task.
+;;; Once the bulk-task is completed, the cleanup functions are executed,
+;;; and the future is marked as done.
+
 (in-package "PARALLEL-FUTURE")
 
-(defvar *context* (wq:make 2))
+(defvar *context* (work-queue:make 2))
 
 (defmacro with-context ((count) &body body)
-  `(let ((*context* (wq:make ,count)))
+  `(let ((*context* (work-queue:make ,count)))
      ,@body))
 
 (defstruct (future
-            (:constructor
-                %make-future (fun dependencies
-                              before units after
-                              &aux (left-count (length units))))
             (:include future:future))
-  (context *context* :type wq:queue      :read-only t)
-  (dependencies  nil :type simple-vector :read-only t))
+  (context *context* :type work-queue:queue :read-only t)
+  (setup   nil       :type (or list symbol function) :read-only t))
 
 (declaim (inline p))
 (defun p (x)
   (future-p x))
 
-(defun %future-fun (future)
+(defun map-list-designator (functions argument)
+  (etypecase functions
+    (null)
+    (list
+     (dolist (function functions)
+       (funcall function argument)))
+    ((or symbol function)
+     (funcall functions argument)))
+  nil)
+
+(defun future-push-self (future)
   (declare (type future future))
-  (funcall (future-before future) future)
-  (if (zerop (length (future-units future)))
-      (close-future future)
-      (wq:push-self-all (future-context future)
-                        (future-units future)))
-  nil)
+  (let ((setup (future-setup future)))
+    (work-queue:push-self
+     (lambda ()
+       (map-list-designator setup future)
+       (if (plusp (future-remaining future))
+           (work-queue:push-self future)
+           (map-list-designator (future-cleanup future) future)))
+     *context*)))
 
-(defun close-future (future)
-  (funcall (future-after future) future)
-  (future:mark-done future))
-
-(defstruct (task
-            (:constructor %make-task (parent task fun &optional hash))
-            (:include wq:task))
-  (parent nil :type future   :read-only t)
-  (task   nil :type function :read-only t))
-
-(defun %task-fun (task)
-  (declare (type task task))
-  (let ((future (task-parent task)))
-    (funcall (task-task task) future)
-    (when (= 1 (atomic-decf (future-left-count future)))
-      (close-future future)))
-  nil)
-
-(defun wrap-units (future during)
-  (map-into (future-units future)
-            (lambda (fun)
-              (etypecase fun
-                (function
-                 (%make-task future fun #'%task-fun))
-                ((cons function (and unsigned-byte fixnum))
-                 (%make-task future (car fun) #'%task-fun
-                             (cdr fun)))))
-            during)
-  future)
-
-(defun make (dependencies before during after &optional constructor &rest arguments)
-  (let* ((dependencies (make-array (length dependencies)
-                                   :initial-contents dependencies))
-         (units        (make-array (length during)))
-         (future       (if constructor
-                           (apply constructor
-                                  :fun          #'%future-fun
-                                  :dependencies dependencies
-                                  :before       before
-                                  :units        units
-                                  :left-count   (length units)
-                                  :after        after
-                                  arguments)
-                           (%make-future #'%future-fun
-                                         dependencies
-                                         before
-                                         units
-                                         after))))
-    (wrap-units future during)
-    (future:mark-dependencies future dependencies)
+(defun make (dependencies setup subtasks cleanup &optional constructor &rest arguments)
+  (declare (type simple-vector dependencies subtasks))
+  (let* ((count        (length subtasks))
+         (future       (apply (or constructor #'make-future)
+                              :function #'future-push-self
+                              :dependencies dependencies
+                              :setup     setup
+                              :subtasks  subtasks
+                              :waiting   count
+                              :remaining count
+                              :cleanup   (if (listp cleanup)
+                                             (append cleanup (list #'future:mark-done))
+                                             (list cleanup #'future:mark-done))
+                              arguments)))
+    (future:mark-dependencies future)
     future))
