@@ -23,7 +23,7 @@
                   (when (eql (cas (queue-tail queue) tail nil)
                              tail)
                     (return tail))))))
-    (setf (queue-head queue) (nreverse tail))))
+    (setf (queue-head queue) (reverse tail))))
 
 (declaim (inline get put))
 (defun get (queue &optional default)
@@ -31,8 +31,11 @@
   (let ((head (queue-head queue)))
     (cond ((or head
                (setf head (slow-get queue)))
-           (setf (queue-head queue) (cdr head))
-           (values (car head) t))
+           (destructuring-bind (value . next) head
+             (setf (queue-head queue) next
+                   (car head)         nil
+                   (cdr head)         nil)
+             (values value t)))
           (t
            (values default nil)))))
 
