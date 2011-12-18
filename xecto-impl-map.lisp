@@ -42,9 +42,8 @@
                                                  (- trip start))))
                                 (vector-push-extend
                                  (let ((offsets (copy-seq offsets))
-                                       (loop    (cons count
-                                                      strides)))
-                                   (lambda (dst)
+                                       (loop    (cons count strides)))
+                                   (lambda (dst index) index
                                      (execute-submap dst function
                                                      offsets
                                                      loop
@@ -59,7 +58,7 @@
                        (map-into offsets #'+
                                  offsets strides)))))))
         (rec 0 offsets)))
-    (nreverse (coerce tasks 'simple-vector))))
+    (coerce tasks 'simple-vector)))
 
 (defun execute-submap (destination function offsets loop arguments)
   (declare (type vector-future:vector-future destination)

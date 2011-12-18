@@ -26,7 +26,7 @@
                (if (= depth (length loop))
                    (vector-push-extend
                     (let ((offsets (copy-seq offsets)))
-                      (lambda (dst)
+                      (lambda (dst index) index
                         (execute-subreduce dst function spine
                                            offsets data)))
                     tasks)
@@ -37,7 +37,7 @@
                        (map-into offsets #'+
                                  offsets strides)))))))
         (rec 0 offsets)))
-    (nreverse (coerce tasks 'simple-vector))))
+    (coerce tasks 'simple-vector)))
 
 (defun execute-subreduce (destination function spine offsets arg)
   (declare (type vector-future:vector-future destination arg)

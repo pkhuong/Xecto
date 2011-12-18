@@ -88,7 +88,7 @@
                               (vector-future:make size
                                                   '()
                                                   (if initial-element
-                                                      (vector (lambda (data)
+                                                      (vector (lambda (data index) index
                                                                 (fill (vector-future:data data)
                                                                       (float initial-element 1d0))))
                                                       #())))))
@@ -117,15 +117,23 @@
   (lambda ()
     (parallel-future:with-context (11)
       (let ()
-        #+nil ((xx (make-xecto '(16384 16384) :initial-element 1))
-           (yy (transpose (make-xecto '(16384 16384) :initial-element 5) 0 1)))
-        (setf xx (make-xecto '(16384 16384) :initial-element 1)
-              yy (transpose (make-xecto '(16384 16384) :initial-element 5) 0 1))
+        #+nil ((xx (make-xecto '(16 16) :initial-element 1))
+           (yy (transpose (make-xecto '(16 16) :initial-element 5) 0 1)))
+        (setf xx (make-xecto '(16 16) :initial-element 1)
+              yy (transpose (make-xecto '(16 16) :initial-element 5) 0 1))
+        (wait xx :done)
+        (wait yy :done)
         (time (let ((x (map-xecto #'+ xx yy))
                     (y (scan-xecto #'+ xx)))
                 (wait (reduce-xecto #'+ (reduce-xecto #'+ (map-xecto #'+ x y)))
                       :done)))
-        (setf *print-length* 20 xx nil yy nil))
+        (setf *print-length* 20 xx nil yy nil)
+        (sleep 1)
+        (gc :full t)
+        (room)
+        (sleep 1)
+        (gc :full t)
+        (room))
       parallel-future:*context*))))
 
 Evaluation took:
