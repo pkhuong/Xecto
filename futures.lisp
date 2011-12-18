@@ -11,10 +11,10 @@
 ;;; all the dependencies for a computation have been fully executed,
 ;;; it too is executed.
 ;;;
-;;; In order to do so, each future also tracks its antidependencies
+;;; In order to do so, each future also tracks its dependents
 ;;; in list of weak pointers.  When the future is marked as done, the
 ;;; depcount (number of yet unfulfilled dependencies) of its
-;;; antidependencies is decremented.  When all the dependencies are
+;;; dependents is decremented.  When all the dependencies are
 ;;; fullfilled (depcount is zero), the future is recursively executed.
 ;;;
 ;;; For convenience, futures are also bulk-tasks, but this is irrelevant
@@ -23,7 +23,7 @@
 ;;; Slots in a FUTURE:
 ;;;  function: list designator of functions to be called on execution;
 ;;;            they receive the future as their single argument.
-;;;  dependents: list of weak pointers to antidependencies, initialized
+;;;  dependents: list of weak pointers to dependents, initialized
 ;;;              to zero and updated on demand.
 ;;;  dependencies: vector of dependencies
 ;;;  depcount: number of dependencies yet to be fullfilled, updated on
