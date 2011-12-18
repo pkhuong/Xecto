@@ -78,18 +78,23 @@
              (when task
                (return-from loop-get-task task)))))
     (declare (inline try))
-    (dotimes (i 256)
-      (try)
-      (loop repeat (* i 128)
-            do (spin-loop-hint)))
-    (with-mutex (lock)
-      (let ((timeout 1e-5))
-        (declare (single-float timeout))
-        (loop
-          (try)
-          (unless (condition-wait cvar lock :timeout timeout)
-            (grab-mutex lock))
-          (setf timeout (min 1.0 (* timeout 1.1))))))))
+    (let ((timeout 1e-3)
+          (fast    t))
+      (declare (single-float timeout))
+      (loop
+       (if fast
+           (dotimes (i 128)
+             (try)
+             (loop repeat (* i 128)
+                   do (spin-loop-hint)))
+           (try))
+        ;; Don't do this at home.
+       (setf fast nil)
+        (with-mutex (lock)
+          (if (condition-wait cvar lock :timeout timeout)
+              (setf fast t)
+              (grab-mutex lock)))
+        (setf timeout (min 1.0 (* timeout 1.1)))))))
 
 (defun %make-worker (wqueue i &optional binding-names binding-compute)
   (let* ((locks  (queue-locks  wqueue))
