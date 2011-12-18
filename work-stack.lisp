@@ -1,5 +1,5 @@
 (defpackage "WORK-STACK"
-  (:use "CL" "SB-EXT" "SB-THREAD")
+  (:use "CL" "SB-EXT" "SB-THREAD" "WORK-UNIT")
   (:shadow cl:push)
   (:export "TASK" "TASK-P" "BULK-TASK" "BULK-TASK-P"
            "TASK-DESIGNATOR"
@@ -44,31 +44,6 @@
 ;;; locality, when the subtasks are sorted right.
 
 (in-package "WORK-STACK")
-
-(defstruct (task
-            (:constructor nil))
-  (function (error "Missing arg") :type (or symbol function)))
-
-(defstruct (bulk-task
-            (:constructor nil))
-  ;; count waiting to be executed, initially (length subtasks)
-  (waiting   (error "Missing arg") :type word)
-  ;; count not done yet, initially (length subtasks)
-  (remaining (error "Missing arg") :type word)
-  (subtask-function nil            :type (or null symbol function))
-  (subtasks  (error "Missing arg") :type (simple-array (or symbol function) 1))
-  (cleanup   nil                   :type (or list symbol function)))
-
-(deftype task-designator ()
-  `(or symbol function task bulk-task))
-
-(defun execute-task (task)
-  (etypecase task
-    ((or symbol function)
-     (funcall task))
-    (task
-     (prog1 (funcall (task-function task) task)
-       (setf (task-function task) nil)))))
 
 (defconstant +stacklet-size+ 128)
 
@@ -147,7 +122,7 @@
                                     (plusp (bulk-task-waiting bulk)))
                            (return-from steal bulk))
                          (setf (cdr x) nil))
-                       (when (cas (svref stacklet position) x nil)
+                       (when (eql x (cas (svref stacklet position) x nil))
                          (incf start)))
                       ((eql x (cas (svref stacklet position) x nil))
                        (return-from steal x))))))))
@@ -171,38 +146,6 @@
   (map nil (lambda (x)
              (%push stack (bulk-task-hintify x hint)))
        values))
-
-(declaim (inline bulk-find-task))
-(defun bulk-find-task (hint-and-bulk)
-  (declare (type cons hint-and-bulk))
-  (destructuring-bind (hint . bulk) hint-and-bulk
-    (declare (type fixnum hint)
-             (type (or null bulk-task) bulk))
-    (when (null bulk)
-      (return-from bulk-find-task (values nil nil)))
-    (let* ((subtasks (bulk-task-subtasks bulk))
-           (begin    hint)
-           (end      (length subtasks)))
-      (loop
-        (when (zerop (bulk-task-waiting bulk))
-          (setf (cdr hint-and-bulk) nil)
-          (return (values nil nil)))
-        (let ((index (position nil subtasks :start begin :end end :test-not #'eql)))
-          (cond (index
-                 (setf begin (1+ index))
-                 (let ((x (aref subtasks index)))
-                   (when (and x
-                              (eql (cas (svref subtasks index) x nil)
-                                   x))
-                     (atomic-decf (bulk-task-waiting bulk))
-                     (setf (car hint-and-bulk) begin)
-                     (return (values x index)))))
-                ((zerop begin)
-                 (setf (cdr hint-and-bulk) nil)
-                 (return (values nil nil)))
-                (t
-                 (setf begin 0
-                       end   hint))))))))
 
 (defun pop-one-task (stack)
   (declare (type stack stack))
@@ -238,6 +181,22 @@
                (return nil))
               (t
                (setf (stack-top stack) (* major +stacklet-size+))))))))
+
+(declaim (inline bulk-find-task))
+(defun bulk-find-task (hint-and-bulk)
+  (declare (type cons hint-and-bulk))
+  (destructuring-bind (hint . bulk) hint-and-bulk
+    (declare (type fixnum hint)
+             (type (or null bulk-task) bulk))
+    (when (null bulk)
+      (return-from bulk-find-task (values nil nil)))
+    (multiple-value-bind (task index) (%bulk-find-task bulk hint)
+      (cond (task
+             (setf (car hint-and-bulk) index)
+             (values task index))
+            (t
+             (setf (cdr hint-and-bulk) nil)
+             (values nil nil))))))
 
 (defun run-one (stack)
   (let ((task (pop-one-task stack))
