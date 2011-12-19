@@ -10,6 +10,9 @@
    (:file "thread-pool" :depends-on ("work-stack"))
    (:file "futures" :depends-on ("work-stack" "status"))
    (:file "parallel-futures" :depends-on ("thread-pool" "futures"))
+   (:file "parallel-primitives" :depends-on ("status"
+                                             "work-stack" "thread-pool"
+                                             "futures" "parallel-futures"))
    (:file "vector-futures" :depends-on ("parallel-futures"))
    (:file "loop-nest-transpose")
    (:file "xecto-impl" :depends-on ("vector-futures" "loop-nest-transpose"))
