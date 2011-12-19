@@ -1,7 +1,8 @@
 (defpackage "PARALLEL"
   (:use "CL")
   (:export "PROMISE" "PROMISE-VALUE" "PLET"
-           "FUTURE" "FUTURE-VALUE" "FUTURE-BIND" "PDOTIMES"))
+           "FUTURE" "FUTURE-VALUE" "FUTURE-BIND"
+           "PDOTIMES" "PMAP" "PREDUCE"))
 
 (in-package "PARALLEL")
 
