@@ -104,8 +104,8 @@
          (if (condition-wait cvar lock :timeout timeout)
              (setf fast t)
              (grab-mutex lock)))
-       (when (and max-time (> total max-time))
-         (incf total timeout)
+       (when (and max-time
+                  (> (incf total timeout) max-time))
          (return :timeout))
        (setf timeout (min 1.0 (* timeout 1.1)))))))
 
@@ -187,6 +187,7 @@
                     (setf queue nil))))
          (declare (notinline inner)
                   (inline check))
+         (check)
          (inner)
          (sb-sys:scrub-control-stack)
          (go retry)))))
