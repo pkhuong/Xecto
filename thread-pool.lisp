@@ -5,7 +5,8 @@
            "QUEUE" "MAKE" "P" "ALIVE-P"
            "ENQUEUE" "ENQUEUE-ALL" "STOP"
            "PUSH-SELF" "PUSH-SELF-ALL"
-           "CURRENT-QUEUE")
+           "PROGRESS-UNTIL"
+           "CURRENT-QUEUE" "WORKER-ID" "WORKER-COUNT")
   (:import-from "WORK-STACK"
                 "TASK" "TASK-P"
                 "BULK-TASK" "BULK-TASK-P"
@@ -65,12 +66,20 @@
 (defvar *worker-hint* 0)
 (defvar *current-queue* nil)
 
-(declaim (inline current-queue))
+(declaim (inline current-queue worker-id worker-count))
 (defun current-queue ()
   (and *current-queue*
        (weak-pointer-value *current-queue*)))
 
-(defun loop-get-task (state lock cvar queue stacks i)
+(defun worker-id ()
+  *worker-id*)
+
+(defun worker-count ()
+  (let ((queue (current-queue)))
+    (and queue (queue-nthread queue))))
+
+(defun loop-get-task (state lock cvar queue stacks i
+                      &optional max-time)
   (flet ((try ()
            (when (eql (car state) :done)
              (return-from loop-get-task nil))
@@ -79,8 +88,10 @@
                (return-from loop-get-task task)))))
     (declare (inline try))
     (let ((timeout 1e-3)
+          (total   0d0)
           (fast    t))
-      (declare (single-float timeout))
+      (declare (single-float timeout)
+               (double-float total))
       (loop
        (if fast
            (dotimes (i 128)
@@ -90,11 +101,14 @@
            (try))
         ;; Don't do this at home.
        (setf fast nil)
-        (with-mutex (lock)
-          (if (condition-wait cvar lock :timeout timeout)
-              (setf fast t)
-              (grab-mutex lock)))
-        (setf timeout (min 1.0 (* timeout 1.1)))))))
+       (with-mutex (lock)
+         (if (condition-wait cvar lock :timeout timeout)
+             (setf fast t)
+             (grab-mutex lock)))
+       (when (and max-time (> total max-time))
+         (incf total timeout)
+         (return :timeout))
+       (setf timeout (min 1.0 (* timeout 1.1)))))))
 
 (defun %make-worker (wqueue i &optional binding-names binding-compute)
   (let* ((locks  (queue-locks  wqueue))
@@ -118,6 +132,7 @@
                           (queue (weak-pointer-value weak-queue)))
                       (unless (and task queue)
                         (return-from outer))
+                      (assert (not (eq task :timeout)))
                       (if (bulk-task-p task)
                           (work-stack:push stack task hint)
                           (work-stack:execute-task task))
@@ -129,6 +144,53 @@
              (inner)
              (sb-sys:scrub-control-stack)))))
      :name (format nil "Work queue worker ~A/~A" i nthread))))
+
+(defun progress-until (condition)
+  (let* ((condition (if (functionp condition)
+                        condition (fdefinition condition)))
+         (wqueue    (current-queue))
+         (i         (worker-id))
+         (locks     (queue-locks  wqueue))
+         (cvar      (queue-cvar   wqueue))
+         (state     (queue-state  wqueue))
+         (queue     (queue-queue  wqueue))
+         (stacks    (queue-stacks wqueue))
+         (nthread   (queue-nthread wqueue))
+         (stack     (aref stacks i))
+         (hint      (float (/ i nthread) 1d0))
+         (weak-queue *current-queue*)
+         (wait-time 1d-3))
+    (setf wqueue nil)
+    (tagbody
+       retry
+       (if (< wait-time 1)
+           (setf wait-time (* wait-time 2)))
+       (labels ((check ()
+                  (let ((value (funcall condition)))
+                    (when value (return-from progress-until value))))
+                (inner ()
+                  (let ((task  (loop-get-task state (aref locks i) cvar
+                                              queue stacks i
+                                              wait-time))
+                        (queue (weak-pointer-value weak-queue)))
+                    (unless (and task (not (eql task :timeout))
+                                 queue)
+                      (go retry))
+                    (if (bulk-task-p task)
+                        (work-stack:push stack task hint)
+                        (work-stack:execute-task task))
+                    (loop while (progn
+                                  (check)
+                                  (work-stack:run-one stack))
+                          do
+                             (when (eq (car state) :done)
+                               (return-from progress-until)))
+                    (setf queue nil))))
+         (declare (notinline inner)
+                  (inline check))
+         (inner)
+         (sb-sys:scrub-control-stack)
+         (go retry)))))
 
 (defun make (nthread &optional constructor &rest arguments)
   (declare (type (and unsigned-byte fixnum) nthread)
