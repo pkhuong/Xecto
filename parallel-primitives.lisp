@@ -169,7 +169,7 @@
                      (pdotimes (i (length arg))
                        (funcall function (aref arg i)))
                      (let ((destination (make-array (length arg))))
-                       (dotimes (i (length arg) (coerce destination type))
+                       (pdotimes (i (length arg) (coerce destination type))
                          (setf (aref destination i)
                                (funcall function (aref arg i))))))))
     (if wait
