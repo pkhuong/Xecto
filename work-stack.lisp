@@ -213,7 +213,6 @@
            (let* ((bulk-task (cdr task))
                   (function (bulk-task-subtask-function bulk-task)))
              (declare (type bulk-task bulk-task))
-             (format t "function: ~A~%" function)
              (if function
                  (funcall function subtask bulk-task subtask-index)
                  (funcall subtask bulk-task subtask-index))
