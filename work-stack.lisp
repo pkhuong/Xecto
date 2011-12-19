@@ -219,7 +219,8 @@
              (when (= (atomic-decf (bulk-task-remaining bulk-task))
                       1)
                (setf (cdr task) nil)
-               (setf (bulk-task-subtasks bulk-task) #())
+               (setf (bulk-task-subtasks bulk-task) #()
+                     (bulk-task-subtask-function bulk-task) nil)
                (let ((cleanup (bulk-task-cleanup bulk-task)))
                  (etypecase cleanup
                    (null)
