@@ -321,8 +321,6 @@
 (defun count-words (documents)
   (parallel:map-group-reduce documents
                              (lambda (document accumulator)
-                               (declare (type simple-vector document)
-                                        (type (function (t t) (values t &optional)) accumulator))
                                (map nil (lambda (word)
                                           (funcall accumulator word 1))
                                     document))
