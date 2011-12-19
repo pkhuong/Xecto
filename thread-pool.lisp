@@ -67,9 +67,10 @@
 (defvar *current-queue* nil)
 
 (declaim (inline current-queue worker-id worker-count))
-(defun current-queue ()
-  (and *current-queue*
-       (weak-pointer-value *current-queue*)))
+(defun current-queue (&optional default)
+  (if *current-queue*
+      (weak-pointer-value *current-queue*)
+      default))
 
 (defun worker-id ()
   *worker-id*)

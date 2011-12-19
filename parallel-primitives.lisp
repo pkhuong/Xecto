@@ -37,8 +37,8 @@
                           (setf (promise-%values promise)
                                 (multiple-value-list (apply thunk args)))
                           (%promise-upgrade promise :done :waiting)))))
-    (work-queue:push-self promise (or (work-queue:current-queue)
-                                      parallel-future:*context*))
+    (work-queue:push-self promise (work-queue:current-queue
+                                   parallel-future:*context*))
     promise))
 
 (defun promise-value (promise)
@@ -105,8 +105,8 @@
                                (call-with-future-values
                                 cleanup dependencies)))))
                  #'make-future)))
-    (work-queue:push-self future (or (work-queue:current-queue)
-                                      parallel-future:*context*))
+    (work-queue:push-self future (work-queue:current-queue
+                                  parallel-future:*context*))
     future))
 
 (defun future-value (future)
@@ -143,14 +143,14 @@
            :subtask-function (lambda (subtask self index)
                                (declare (ignore subtask self))
                                (funcall function index)))))
-    (work-queue:push-self future (or (work-queue:current-queue)
-                                     parallel-future:*context*))
+    (work-queue:push-self future (work-queue:current-queue
+                                  parallel-future:*context*))
     future))
 
 (defun call-n-times (count function aggregate-function &optional cleanup)
   (let* ((worker-count (or (work-queue:worker-count
-                            (or (work-queue:current-queue)
-                                parallel-future:*context*))
+                            (work-queue:current-queue
+                             parallel-future:*context*))
                            (error "No current queue")))
          (max          (expt worker-count 2)))
     (if (<= count max)
@@ -214,8 +214,8 @@
                        function
                        (fdefinition function)))
          (accumulators (make-array (work-queue:worker-count
-                                    (or (work-queue:current-queue)
-                                        parallel-future:*context*))
+                                    (work-queue:current-queue
+                                     parallel-future:*context*))
                                    :initial-element seed))
          (future
            (if key
