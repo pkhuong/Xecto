@@ -61,7 +61,8 @@
 (defstruct stack
   (stacklets (error "Foo") :type (array (simple-vector #.+stacklet-size+) 1)
                            :read-only t)
-  (top    0 :type (and unsigned-byte fixnum)))
+  (top    0 :type (and unsigned-byte fixnum))
+  (bottom 0 :type (and unsigned-byte fixnum)))
 
 (defun make ()
   (make-stack :stacklets (make-array 16 :fill-pointer 0 :adjustable t)))
@@ -102,31 +103,50 @@
 
 (defun steal (stack)
   (declare (type stack stack))
-  (loop repeat (ceiling (stack-top stack) +stacklet-size+)
-        for stacklet across (stack-stacklets stack)
-        do
-           (let ((start 0))
-             (loop
-              (let* ((position  (position nil stacklet
-                                          :start start
-                                          :test-not #'eql))
-                     (x         (and position
-                                     (aref stacklet position))))
-                (cond ((null position)
-                       (return))
-                      ((null x)
-                       (setf start (1+ position)))
-                      ((consp x)
-                       (let ((bulk (cdr x)))
-                         (when (and bulk
-                                    (plusp (bulk-task-waiting bulk)))
-                           (return-from steal bulk)))
-                       (setf (cdr x) nil)
-                       (setf start position)
-                       (when (eql x (cas (svref stacklet position) x nil))
-                         (incf start)))
-                      ((eql x (cas (svref stacklet position) x nil))
-                       (return-from steal x))))))))
+  (labels ((update-bottom (i)
+             (when (/= i (stack-bottom stack))
+               (setf (stack-bottom stack) i)))
+           (sub-steal (begin end)
+             (declare (type (and fixnum unsigned-byte) begin end))
+             (loop with stacklets = (stack-stacklets stack)
+                   for i from begin below (max end (length stacklets))
+                   for stacklet = (aref stacklets i)
+                   do
+                      (let ((start 0))
+                        (loop
+                          (let* ((position  (position nil stacklet
+                                                      :start start
+                                                      :test-not #'eql))
+                                 (x         (and position
+                                                 (aref stacklet position))))
+                            (cond ((null position)
+                                   (return))
+                                  ((null x)
+                                   (setf start (1+ position)))
+                                  ((consp x)
+                                   (let ((bulk (cdr x)))
+                                     (when (and bulk
+                                                (plusp (bulk-task-waiting bulk)))
+                                       (update-bottom i)
+                                       (return-from steal bulk)))
+                                   (setf (cdr x) nil)
+                                   (setf start position)
+                                   (when (eql x (cas (svref stacklet position) x nil))
+                                     (incf start)))
+                                  ((eql x (cas (svref stacklet position) x nil))
+                                   (update-bottom i)
+                                   (return-from steal x)))))))))
+    (declare (inline update-bottom))
+    (let ((bottom (stack-bottom stack))
+          (top    (ceiling (stack-top stack) +stacklet-size+)))
+      (cond ((>= bottom top)
+             (update-bottom 0)
+             (sub-steal 0 top))
+            (t
+             (sub-steal bottom top)
+             (sub-steal 0 bottom)
+             (update-bottom 0)
+             nil)))))
 
 ;; bulk tasks are represented, on-stack as conses: the CAR is a hint
 ;; wrt where to start looking for subtasks, and the CDR is the bulk-task
