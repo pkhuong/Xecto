@@ -2,7 +2,8 @@
   (:use)
   (:export "PROMISE" "PROMISE-VALUE" "LET"
            "FUTURE" "FUTURE-VALUE" "BIND"
-           "DOTIMES" "MAP" "REDUCE"))
+           "DOTIMES" "MAP" "REDUCE"
+           "MAP-GROUP-REDUCE"))
 
 (defpackage "PARALLEL-IMPL"
   (:use "CL")
@@ -239,6 +240,67 @@
     (if wait
         (future-value future)
         future)))
+
+(defun parallel:map-group-reduce (sequence map reduce
+                                  &key (group-test #'eql)
+                                       (group-by   (lambda (key value)
+                                                     (declare (ignore key))
+                                                     value))
+                                       (wait t)
+                                       (master-table t))
+  (let* ((arg     (coerce sequence 'simple-vector))
+         (nthread (work-queue:worker-count
+                   (work-queue:current-queue
+                    parallel-future:*context*)))
+         (tables  (map-into (make-array nthread)
+                            (lambda () (make-hash-table :test group-test))))
+         (map     (if (functionp map) map (fdefinition map)))
+         (reduce  (if (functionp reduce) reduce (fdefinition reduce)))
+         (group-by (if (functionp group-by) group-by (fdefinition group-by))))
+    (labels ((clean-table (table)
+               (declare (type hash-table table))
+               (maphash (lambda (k v)
+                          (setf (gethash k table) (cdr v)))
+                        table)
+               table)
+             (aggregate-keys ()
+               (let* ((size   (reduce #'max tables :key #'hash-table-count))
+                      (master (make-hash-table :test group-test :size size))
+                      (vector (make-array size :adjustable t :fill-pointer 0)))
+                 (map nil (lambda (table)
+                            (maphash (lambda (k v)
+                                       (let ((cache (gethash k master)))
+                                         (if cache
+                                             (push v (cdr cache))
+                                             (let ((cache (cons k (list v))))
+                                               (vector-push-extend cache vector)
+                                               (setf (gethash k master) cache)))))
+                                     table))
+                      tables)
+                 (let ((vector (coerce (shiftf vector nil) 'simple-vector)))
+                   (parallel:dotimes (i (length vector)
+                                        (if master-table
+                                            (values vector
+                                                    (clean-table master))
+                                            vector))
+                     (let* ((cache  (aref vector i))
+                            (values (cdr cache)))
+                       (setf (cdr cache) (reduce reduce values))))))))
+      (let ((future (parallel:dotimes (i (length arg) (aggregate-keys))
+                      (let* ((x     (aref arg i))
+                             (val   (funcall map x))
+                             (key   (funcall group-by x val))
+                             (table (aref tables (work-queue:worker-id))))
+                        (declare (type hash-table table))
+                        (multiple-value-bind (acc foundp)
+                            (gethash key table)
+                          (setf (gethash key table)
+                                (if foundp
+                                    (funcall reduce acc val)
+                                    val)))))))
+        (if wait
+            (future-value (future-value future))
+            future)))))
 #||
 
 (deftype index ()
