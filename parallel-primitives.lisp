@@ -239,3 +239,72 @@
     (if wait
         (future-value future)
         future)))
+#||
+
+(deftype index ()
+  `(mod ,most-positive-fixnum))
+
+(defun pqsort (vec)
+  (declare (type (simple-array fixnum 1) vec)
+           (optimize speed))
+  (labels ((partition (begin end pivot)
+             (declare (type index begin end)
+                      (type fixnum pivot))
+             (loop while (> end begin)
+                   do (if (<= (aref vec begin) pivot)
+                          (incf begin)
+                          (rotatef (aref vec begin)
+                                   (aref vec (decf end))))
+                   finally (return begin)))
+           (selection-sort (begin end)
+             (loop for dst from begin below end
+                   do
+                   (let ((min   (aref vec dst))
+                         (min-i dst))
+                     (declare (type fixnum min)
+                              (type index min-i))
+                     (loop for i from (1+ dst) below end
+                           do (let ((x (aref vec i)))
+                                (when (< x min)
+                                  (setf min   x
+                                        min-i i))))
+                     (rotatef (aref vec begin) (aref vec min-i)))))
+           (rec (begin end depth)
+             (declare (type index begin end depth))
+             (when (<= (- end begin) 8)
+               (return-from rec (selection-sort begin end)))
+             (let ((first  (aref vec begin))
+                   (last   (aref vec (1- end)))
+                   (middle (aref vec (truncate (+ begin end) 2))))
+               (declare (type fixnum first last middle))
+               (when (> first last)
+                 (rotatef first last))
+               (cond ((<= middle first)
+                      (setf middle first))
+                     ((>= middle last)
+                      (setf middle last)))
+               (let ((split (partition begin end middle)))
+                 (declare (type index split))
+                 (cond ((= split begin)
+                        (let ((next (position middle vec
+                                              :start    begin
+                                              :end      end
+                                              :test-not #'eql)))
+                          (assert (> next begin))
+                          (rec next end depth)))
+                       ((= split end)
+                        (let ((last (position middle vec
+                                              :start    begin
+                                              :end      end
+                                              :from-end t
+                                              :test-not #'eql)))
+                          (assert last)
+                          (rec begin last depth)))
+                       (t
+                        (parallel:let ((left  (rec begin split (1+ depth)))
+                                       (right (rec split end   (1+ depth)))
+                                       (:parallel (>= (- end begin) 512)))
+                          (declare (ignore left right)))))))))
+    (rec 0 (length vec) 0)
+    vec))
+||#
