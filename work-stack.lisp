@@ -156,7 +156,9 @@
     (multiple-value-bind (major minor) (split-index (stack-top stack))
       (let* ((stacklets (stack-stacklets stack))
              (stacklet  (aref stacklets major))
-             (position  (position nil stacklet :from-end t :end minor :test-not #'eql)))
+             (position  (position nil stacklet :from-end t
+                                               :end minor
+                                               :test-not #'eql)))
         (cond (position
                (let ((x (aref stacklet position)))
                  (etypecase x
@@ -171,8 +173,8 @@
                     (setf (cdr x) nil
                           (svref stacklet position) nil
                           (stack-top stack) (+ (* major +stacklet-size+)
-                                               position)))
-                   (barrier (:memory))
+                                               position))
+                    (barrier (:memory)))
                    ((or task symbol function)
                     (setf (stack-top stack) (+ (* major +stacklet-size+)
                                                position))
