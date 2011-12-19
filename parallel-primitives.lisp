@@ -274,7 +274,7 @@
                         (when (< x min)
                           (setf min   x
                                 min-i i))))
-             (rotatef (aref vec begin) (aref vec min-i)))))
+             (rotatef (aref vec dst) (aref vec min-i)))))
 
 (defun find-pivot (vec begin end)
   (declare (type (simple-array fixnum 1) vec)
@@ -327,4 +327,73 @@
                         (declare (ignore left right))))))))
     (rec 0 (length vec))
     vec))
+
+(defun shuffle (vector)
+  (declare (type vector vector))
+  (let ((end (length vector)))
+    (loop for i from (- end 1) downto 0
+          do (rotatef (aref vector i) 
+                      (aref vector (random (+ i 1)))))
+    vector))
+
+(defun test-pqsort (nproc size)
+  (let ((vec (shuffle (let ((i 0))
+                        (map-into (make-array size :element-type 'fixnum)
+                                  (lambda ()
+                                    (incf i)))))))
+    (parallel-future:with-context (nproc)
+      (time (pqsort vec)))
+    (loop for i below (1- (length vec))
+          do (assert (<= (aref vec i) (aref vec (1+ i)))))))
+
+* (test-pqsort 1 (ash 1 25))
+  
+Evaluation took:
+  6.420 seconds of real time
+  6.416401 seconds of total run time (6.416401 user, 0.000000 system)
+  99.94% CPU
+  17,930,818,675 processor cycles
+  45,655,456 bytes consed
+  
+NIL
+* (test-pqsort 2 (ash 1 25))
+
+Evaluation took:
+  3.374 seconds of real time
+  6.572410 seconds of total run time (6.572410 user, 0.000000 system)
+  194.78% CPU
+  9,422,768,541 processor cycles
+  45,555,680 bytes consed
+  
+NIL
+* (test-pqsort 4 (ash 1 25))
+
+Evaluation took:
+  1.794 seconds of real time
+  6.536409 seconds of total run time (6.532409 user, 0.004000 system)
+  364.33% CPU
+  5,010,358,913 processor cycles
+  45,502,272 bytes consed
+  
+NIL
+* (test-pqsort 8 (ash 1 25))
+
+Evaluation took:
+  1.263 seconds of real time
+  8.456529 seconds of total run time (8.452529 user, 0.004000 system)
+  669.60% CPU
+  3,525,995,357 processor cycles
+  45,649,552 bytes consed
+  
+NIL
+* (test-pqsort 11 (ash 1 25))
+
+Evaluation took:
+  1.153 seconds of real time
+  9.188575 seconds of total run time (9.184574 user, 0.004001 system)
+  796.96% CPU
+  3,219,159,980 processor cycles
+  45,678,192 bytes consed
+
+NIL
 ||#
