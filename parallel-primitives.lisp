@@ -77,14 +77,16 @@
                  (remove-if-not #'future-p dependencies)
                  (lambda (self)
                    (setf (future-%values self)
-                         (values-list (call-with-future-values
-                                       callback dependencies))))
+                         (multiple-value-list
+                          (call-with-future-values
+                           callback dependencies))))
                  (or subtasks #())
                  (and cleanup
                       (lambda (self)
                         (setf (future-%values self)
-                              (values-list (call-with-future-values
-                                            cleanup dependencies)))))
+                              (multiple-value-list
+                               (call-with-future-values
+                                cleanup dependencies)))))
                  #'make-future)))
     (work-queue:push-self future parallel-future:*context*)
     future))
@@ -117,7 +119,7 @@
            (and cleanup
                 (lambda (self)
                   (setf (future-%values self)
-                        (values-list (funcall cleanup)))))
+                        (multiple-value-list (funcall cleanup)))))
            #'make-future
            :%values '(nil)
            :subtask-function (lambda (subtask self index)
