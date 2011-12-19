@@ -1,10 +1,15 @@
 (defpackage "PARALLEL"
-  (:use "CL")
-  (:export "PROMISE" "PROMISE-VALUE" "PLET"
-           "FUTURE" "FUTURE-VALUE" "FUTURE-BIND"
-           "PDOTIMES" "PMAP" "PREDUCE"))
+  (:use)
+  (:export "PROMISE" "PROMISE-VALUE" "LET"
+           "FUTURE" "FUTURE-VALUE" "BIND"
+           "DOTIMES" "MAP" "REDUCE"))
 
-(in-package "PARALLEL")
+(defpackage "PARALLEL-IMPL"
+  (:use "CL")
+  (:import-from "PARALLEL" "PROMISE" "PROMISE-VALUE"
+                "FUTURE" "FUTURE-VALUE"))
+
+(in-package "PARALLEL-IMPL")
 
 (deftype status ()
   `(member :waiting :done))
@@ -42,7 +47,7 @@
   (%promise-wait promise :done)
   (values-list (promise-%values promise)))
 
-(defmacro plet ((&rest bindings) &body body)
+(defmacro parallel:let ((&rest bindings) &body body)
   (let ((temporaries (loop for (name value) in bindings
                            collect `(,(gensym "PROMISE") (promise (lambda ()
                                                                     ,value))))))
@@ -91,8 +96,8 @@
   (future:wait future :done)
   (values-list (future-%values future)))
 
-(defmacro future-bind ((&rest bindings)
-                       &body body)
+(defmacro parallel:bind ((&rest bindings)
+                         &body body)
   (let ((wait nil))
     (when (eql :wait (car body))
       (setf wait t)
@@ -134,7 +139,7 @@
                              (funcall aggregate-function begin end)))
                          cleanup)))))
 
-(defmacro pdotimes ((var count &optional result) &body body)
+(defmacro parallel:dotimes ((var count &optional result) &body body)
   (let ((begin (gensym "BEGIN"))
         (end   (gensym "END"))
         (i     (gensym "I"))
@@ -157,34 +162,38 @@
                               do
                                  (let ((,var ,i))
                                    ,@body))))
-                    (lambda ()
-                      (progn ,result))))))
+                    ,(and result
+                          `(lambda ()
+                             (let ((,var nil))
+                               (declare (ignorable ,var))
+                               (progn ,result))))))))
 
-(defun pmap (type function arg &key (wait t))
+(defun parallel:map (type function arg &key (wait t))
   (let* ((arg (coerce arg 'simple-vector))
          (function (if (functionp function)
                        function
                        (fdefinition function)))
          (future (if (eql nil type)
-                     (pdotimes (i (length arg))
+                     (parallel:dotimes (i (length arg))
                        (funcall function (aref arg i)))
                      (let ((destination (make-array (length arg))))
-                       (pdotimes (i (length arg) (coerce destination type))
+                       (parallel:dotimes (i (length arg) (coerce destination type))
                          (setf (aref destination i)
                                (funcall function (aref arg i))))))))
     (if wait
         (future-value future)
         future)))
 
-(defun preduce (function arg seed &key (wait t))
+(defun parallel:reduce (function arg seed &key (wait t))
   (let* ((arg (coerce arg 'simple-vector))
          (function (if (functionp function)
                        function
                        (fdefinition function)))
          (accumulators (make-array (work-queue:worker-count)
                                    :initial-element seed))
-         (future (dotimes (i (length arg) (reduce function accumulators
-                                                  :initial-value seed))
+         (future (parallel:dotimes (i (length arg)
+                                      (reduce function accumulators
+                                              :initial-value seed))
                    (let ((idx (work-queue:worker-id)))
                      (setf (aref accumulators idx)
                            (funcall function
