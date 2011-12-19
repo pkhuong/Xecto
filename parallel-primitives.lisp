@@ -346,6 +346,40 @@
     (loop for i below (1- (length vec))
           do (assert (<= (aref vec i) (aref vec (1+ i)))))))
 
+(defun test-sort (size)
+  (let ((vec (shuffle (let ((i 0))
+                        (map-into (make-array size :element-type 'fixnum)
+                                  (lambda ()
+                                    (incf i)))))))
+    (declare (type (simple-array fixnum 1) vec))
+    (time (locally (declare (optimize speed (space 0))
+                            (inline sort))
+            (sort vec #'<)))
+    
+    (loop for i below (1- (length vec))
+            do (assert (<= (aref vec i) (aref vec (1+ i)))))))
+
+;; SBCL sort (heap sort...)
+* (test-sort (ash 1 25))
+
+Evaluation took:
+  15.870 seconds of real time
+  15.828989 seconds of total run time (15.828989 user, 0.000000 system)
+  99.74% CPU
+  44,325,352,312 processor cycles
+  0 bytes consed
+
+;; without any parallelism machinery
+* (test-pqsort 1 (ash 1 25))
+
+Evaluation took:
+  6.245 seconds of real time
+  6.236389 seconds of total run time (6.236389 user, 0.000000 system)
+  99.86% CPU
+  17,440,707,947 processor cycles
+  0 bytes consed
+
+;; with parallelism
 * (test-pqsort 1 (ash 1 25))
   
 Evaluation took:
