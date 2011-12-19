@@ -35,8 +35,8 @@
   (vector-future-%data vector-future))
 
 (defun (setf vector-future-data) (value vector-future)
-  (setf (vector-future-%data vector-future) value
-        (car (vector-future-handle vector-future) value))
+  (setf (vector-future-%data vector-future)        value
+        (car (vector-future-handle vector-future)) value)
   value)
 
 (defun data (vector-future)
