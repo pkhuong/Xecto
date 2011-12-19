@@ -243,9 +243,7 @@
 
 (defun parallel:map-group-reduce (sequence map reduce
                                   &key (group-test #'eql)
-                                       (group-by   (lambda (key value)
-                                                     (declare (ignore key))
-                                                     value))
+                                       group-by
                                        (wait t)
                                        (master-table t))
   (let* ((arg     (coerce sequence 'simple-vector))
@@ -256,7 +254,9 @@
                             (lambda () (make-hash-table :test group-test))))
          (map     (if (functionp map) map (fdefinition map)))
          (reduce  (if (functionp reduce) reduce (fdefinition reduce)))
-         (group-by (if (functionp group-by) group-by (fdefinition group-by))))
+         (group-by (and group-by
+                        (if (functionp group-by) group-by (fdefinition group-by)))))
+    (declare (type (simple-array hash-table 1) tables))
     (labels ((clean-table (table)
                (declare (type hash-table table))
                (maphash (lambda (k v)
@@ -288,16 +288,19 @@
                        (setf (cdr cache) (reduce reduce values))))))))
       (let ((future (parallel:dotimes (i (length arg) (aggregate-keys))
                       (let* ((x     (aref arg i))
-                             (val   (funcall map x))
-                             (key   (funcall group-by x val))
                              (table (aref tables (work-queue:worker-id))))
                         (declare (type hash-table table))
-                        (multiple-value-bind (acc foundp)
-                            (gethash key table)
-                          (setf (gethash key table)
-                                (if foundp
-                                    (funcall reduce acc val)
-                                    val)))))))
+                        (multiple-value-bind (val key)
+                            (if group-by
+                                (values (funcall map x)
+                                        (funcall group-by x))
+                                (funcall map x))
+                          (multiple-value-bind (acc foundp)
+                              (gethash key table)
+                            (setf (gethash key table)
+                                  (if foundp
+                                      (funcall reduce acc val)
+                                      val))))))))
         (if wait
             (future-value (future-value future))
             future)))))
