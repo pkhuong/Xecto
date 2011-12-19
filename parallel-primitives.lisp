@@ -31,13 +31,14 @@
     %promise-upgrade)
 
 (defun promise (thunk &rest args)
-  (work-queue:push-self
-   (make-promise (lambda (promise)
-                   (declare (type promise promise))
-                   (setf (promise-%values promise)
-                         (multiple-value-list (apply thunk args)))
-                   (%promise-upgrade promise :done :waiting)))
-   parallel-future:*context*))
+  (let ((promise
+          (make-promise (lambda (promise)
+                          (declare (type promise promise))
+                          (setf (promise-%values promise)
+                                (multiple-value-list (apply thunk args)))
+                          (%promise-upgrade promise :done :waiting)))))
+    (work-queue:push-self promise parallel-future:*context*)
+    promise))
 
 (defun promise-value (promise)
   (declare (type promise promise))
@@ -49,14 +50,29 @@
   (values-list (promise-%values promise)))
 
 (defmacro parallel:let ((&rest bindings) &body body)
-  (let ((temporaries (loop for (name value) in bindings
-                           collect `(,(gensym "PROMISE") (promise (lambda ()
-                                                                    ,value))))))
-    `(let* (,@temporaries
-            ,@(loop for (name) in bindings
-                    for (temp) in temporaries
-                    collect `(,name (promise-value ,temp))))
-       ,@body)))
+  (let* ((parallelp   t)
+         (names       '())
+         (values      '())
+         (temporaries (loop for (name value) in bindings
+                            if (eql name :parallel)
+                              do (setf parallelp value)
+                            else collect
+                            (progn
+                              (push name names)
+                              (push value values)
+                              `(,(gensym "PROMISE") (promise
+                                                     (lambda ()
+                                                       ,value))))))
+         (function   (gensym "PARALLEL-LET-FUNCTION")))
+    (setf names  (nreverse names)
+          values (nreverse values))
+    `(flet ((,function (,@names)
+              ,@body))
+       (if ,parallelp
+           (let ,temporaries
+             (,function ,@(loop for (temp) in temporaries
+                                collect `(promise-value ,temp))))
+           (,function ,@values)))))
 
 (defstruct (future
             (:include parallel-future:future))
