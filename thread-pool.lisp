@@ -113,8 +113,9 @@
 (declaim (inline %worker-loop))
 (defun %worker-loop (weak-queue index hint &optional poll-function wait-time)
   (flet ((poll ()
-           (let ((x (funcall poll-function)))
-             (when x (return-from %worker-loop x)))))
+           (when poll-function
+             (let ((x (funcall poll-function)))
+               (when x (return-from %worker-loop x))))))
     (declare (inline poll))
     (let* ((wait-time (and poll-function (or wait-time 1)))
            (wqueue    (or (weak-pointer-value weak-queue)
@@ -138,8 +139,7 @@
           (work-stack:push stack task hint)
           (work-stack:execute-task task))
       (loop while (progn
-                    (when poll-function
-                      (poll))
+                    (poll)
                     (work-stack:run-one stack))
             do (when (eq (car state) :done)
                  (return-from %worker-loop)))
@@ -178,7 +178,8 @@
     (tagbody
        retry
        (if (< wait-time 1)
-           (setf wait-time (* wait-time 2)))
+           (setf wait-time (* wait-time 2))
+           (setf wait-time 1))
        (labels ((check ()
                   (let ((value (funcall condition)))
                     (when value (return-from progress-until value))))
