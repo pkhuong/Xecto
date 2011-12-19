@@ -87,7 +87,7 @@
              (when task
                (return-from loop-get-task task)))))
     (declare (inline try))
-    (let ((timeout 1e-3)
+    (let ((timeout 1e-4)
           (total   0d0)
           (fast    t))
       (declare (single-float timeout)
@@ -177,9 +177,6 @@
          (wait-time 1d-3))
     (tagbody
        retry
-       (if (< wait-time 1)
-           (setf wait-time (* wait-time 2))
-           (setf wait-time 1))
        (labels ((check ()
                   (let ((value (funcall condition)))
                     (when value (return-from progress-until value))))
