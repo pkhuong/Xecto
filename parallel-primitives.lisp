@@ -1,7 +1,8 @@
 (defpackage "PARALLEL"
   (:use)
   (:export "PROMISE" "PROMISE-VALUE" "LET"
-           "FUTURE" "FUTURE-VALUE" "BIND"
+           "FUTURE" "FUTURE-VALUE" "FUTURE-VALUE*" "BIND"
+           "STREAM" "HEAD" "TAIL" "UNFOLD" "SCAN" "SCAN*" "FOREACH" "FOLD"
            "DOTIMES" "MAP" "REDUCE"
            "MAP-GROUP-REDUCE"))
 
@@ -15,7 +16,7 @@
 (deftype status ()
   `(member :waiting :done))
 
-(defstruct (promise
+(defstruct (parallel:promise
             (:constructor make-promise (function))
             (:include work-stack:task))
   %values
@@ -31,7 +32,7 @@
     %promise-wait
     %promise-upgrade)
 
-(defun promise (thunk &rest args)
+(defun parallel:promise (thunk &rest args)
   (let ((promise
           (make-promise (lambda (promise)
                           (declare (type promise promise))
@@ -42,7 +43,7 @@
                                    parallel-future:*context*))
     promise))
 
-(defun promise-value (promise)
+(defun parallel:promise-value (promise)
   (declare (type promise promise))
   (when (work-queue:worker-id)
     (work-queue:progress-until
@@ -76,7 +77,7 @@
                                 collect `(promise-value ,temp))))
            (,function ,@values)))))
 
-(defstruct (future
+(defstruct (parallel:future
             (:include parallel-future:future))
   %values)
 
@@ -88,7 +89,7 @@
                                    x))
                        futures)))
 
-(defun future (dependencies callback &key subtasks cleanup)
+(defun parallel:future (dependencies callback &key subtasks cleanup)
   (declare (type simple-vector dependencies)
            (type (or null simple-vector) subtasks))
   (let ((future (parallel-future:make
@@ -110,13 +111,26 @@
                                   parallel-future:*context*))
     future))
 
-(defun future-value (future)
+(defun parallel:future-value (future)
   (declare (type future future))
   (when (work-queue:worker-id)
     (work-queue:progress-until (lambda ()
                                  (eql (future:status future) :done))))
   (future:wait future :done)
   (values-list (future-%values future)))
+
+(defun parallel:future-value* (future)
+  (loop
+    (multiple-value-call
+        (lambda (&optional (value nil value-p) &rest values)
+          (cond ((future-p value)
+                 (setf future value))
+                (value-p
+                 (return (multiple-value-call #'values
+                           value (values-list values))))
+                (t
+                 (return (values)))))
+      (future-value future))))
 
 (defmacro parallel:bind ((&rest bindings)
                          &body body)
@@ -126,8 +140,176 @@
       (pop body))
     `(,(if wait 'future-value 'identity)
       (future (vector ,@(mapcar #'second bindings))
-              (lambda ,@(mapcar #'first bindings)
+              (lambda ,(mapcar #'first bindings)
                 ,@body)))))
+
+(defconstant +chunk-size+ 128)
+
+(defstruct (parallel:stream
+            (:constructor %make-stream))
+  (index   0 :type (mod #.+chunk-size+))
+  (chunk nil :type simple-vector)
+  (%next nil :type (or null function parallel:stream parallel:future)))
+
+(defun make-stream (index chunk %next)
+  (and (< index (length chunk))
+       (%make-stream :index index :chunk chunk :%next %next)))
+
+(defun stream-next (stream)
+  (let ((next (stream-%next stream)))
+    (if (functionp next)
+        (setf (stream-%next stream) (funcall next))
+        next)))
+
+(defun parallel:head (stream)
+  (and (stream-p stream)
+       (aref (stream-chunk stream)
+             (stream-index stream))))
+
+(defun parallel:tail (stream)
+  (and (stream-p stream)
+       (let ((index (1+ (stream-index stream)))
+             (chunk (stream-chunk stream)))
+         (if (< index (length chunk))
+             (%make-stream :index index
+                           :chunk chunk
+                           :%next (stream-%next stream))
+             (setf (stream-%next stream)
+                   (future-value (stream-next stream)))))))
+
+
+(declaim (maybe-inline parallel:unfold
+                       parallel:scan* parallel:scan parallel:foreach
+                       parallel:fold))
+(defun parallel:unfold (function seed)
+  (let ((function (if (functionp function)
+                      function
+                      (fdefinition function))))
+    (labels ((make-chunk ()
+               (let ((chunk (make-array +chunk-size+)))
+                 (dotimes (i +chunk-size+ (values chunk t))
+                   (multiple-value-bind (value seedp finished)
+                       (funcall function seed)
+                     (when finished
+                       (return (values (sb-kernel:%shrink-vector chunk i) nil)))
+                     (setf (aref chunk i) value
+                           seed           seedp)))))
+             (next (cache)
+               (if (cdr cache)
+                   (car cache)
+                   (setf (values (car cache) (cdr cache))
+                         (values
+                          (parallel:future
+                           #()
+                           (lambda ()
+                             (multiple-value-bind (chunk live)
+                                 (make-chunk)
+                               (and (plusp (length chunk))
+                                    (make-stream 0 chunk
+                                                 (and live
+                                                      (let ((cache (list nil)))
+                                                        (lambda ()
+                                                          (next cache)))))))))
+                          t)))))
+      (make-stream 0
+                   (make-chunk)
+                   (let ((cache (list nil)))
+                     (lambda ()
+                       (next cache)))))))
+
+(defun parallel:scan* (stream function seed)
+  (declare (type parallel:stream stream))
+  (let ((function (if (functionp function)
+                      function
+                      (fdefinition function))))
+    (labels ((make-chunk (index input)
+               (declare (type (and unsigned-byte fixnum) index)
+                        (type simple-vector input))
+               (let* ((length (- (length input) index))
+                      (chunk  (make-array length)))
+                 (dotimes (i length (values chunk t))
+                   (multiple-value-bind (value seedp finished)
+                       (funcall function (aref input (+ i index)) seed)
+                     (when finished
+                       (return (values (sb-kernel:%shrink-vector chunk i) nil)))
+                     (setf (aref chunk i) value
+                           seed           seedp)))))
+             (next (cache)
+               (if (cdr cache)
+                   (car cache)
+                   (setf (values (car cache) (cdr cache))
+                         (values
+                          (parallel:bind ((next (stream-next stream)))
+                            (and next
+                                 (multiple-value-bind (chunk live)
+                                     (make-chunk (stream-index stream) (stream-chunk next))
+                                   (setf stream next)
+                                   (and (plusp (length chunk))
+                                        (make-stream
+                                         0 chunk
+                                         (and live (stream-next next)
+                                              (let ((cache (list nil)))
+                                                (lambda ()
+                                                  (next cache)))))))))
+                          t)))))
+      (make-stream 0 (make-chunk (stream-index stream)
+                                 (stream-chunk stream))
+                   (let ((cache (list nil)))
+                     (lambda ()
+                       (next cache)))))))
+
+(defun parallel:scan (stream function seed)
+  (declare (inline parallel:scan*))
+  (parallel:scan* stream (lambda (value seed)
+                           (multiple-value-bind (seed finished)
+                               (funcall function value seed)
+                             (values seed seed finished)))
+                  seed))
+
+(defun parallel:fold (stream function seed &key (wait t))
+  (declare (type parallel:stream stream))
+  (let ((function (if (functionp function)
+                      function
+                      (fdefinition function))))
+    (labels ((consume-chunk (index input)
+               (declare (type (and unsigned-byte fixnum) index)
+                        (type simple-vector input))
+               (loop for i from index below (length input) do
+                 (multiple-value-bind (seedp finished)
+                     (funcall function (aref input (+ i index)) seed)
+                   (setf seed seedp)
+                   (when finished
+                     (return nil)))
+                     finally (return t)))
+             (iter (stream)
+               (declare (type parallel:stream stream))
+               (let ((continue (consume-chunk (stream-index stream)
+                                              (stream-chunk stream))))
+                 (if (not continue)
+                     seed
+                     (parallel:bind ((next (stream-next stream)))
+                       (if next
+                           (iter next)
+                           seed))))))
+      (let ((future (iter stream)))
+        (if wait
+            (parallel:future-value* future)
+            future)))))
+
+(defun parallel:foreach (stream function &key (for-effect nil) (wait t))
+  (declare (inline parallel:scan parallel:fold))
+  (let ((function (if (functionp function)
+                      function
+                      (fdefinition function))))
+    (cond (for-effect
+           (parallel:fold stream (lambda (value seed) seed
+                                   (funcall function value))
+                          nil :wait wait)
+           nil)
+          (t
+           (parallel:scan stream (lambda (value seed) seed
+                                   (funcall function value))
+                          nil)))))
 
 (defun %call-n-times (count function cleanup)
   (let ((future
