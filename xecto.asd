@@ -4,10 +4,11 @@
   :description "Xecto is a simple parallel vector-processing library"
   :depends-on ("sb-queue")
   :components
-  ((:file "work-units")
+  ((:file "status")
+   (:file "work-units")
    (:file "work-stack" :depends-on ("work-units"))
    (:file "thread-pool" :depends-on ("work-stack"))
-   (:file "futures" :depends-on ("work-stack"))
+   (:file "futures" :depends-on ("work-stack" "status"))
    (:file "parallel-futures" :depends-on ("thread-pool" "futures"))
    (:file "vector-futures" :depends-on ("parallel-futures"))
    (:file "loop-nest-transpose")

@@ -60,15 +60,6 @@
 (deftype status ()
   '(member :orphan :frozen :waiting :running :done :cancelled))
 
-(defstruct (slow-status
-            (:constructor
-                make-slow-status (&optional (status :orphan))))
-  (status :orphan          :type status)
-  (lock   (make-mutex)     :type mutex
-                           :read-only t)
-  (cvar   (make-waitqueue) :type waitqueue
-                           :read-only t))
-
 (defstruct (future
             (:include work-stack:bulk-task)
             (:constructor nil))
@@ -83,63 +74,12 @@
     (and (listp dependents)
          dependents)))
 
-(defun status (future)
-  (declare (type future future))
-  (let ((%status (future-%status future)))
-    (if (slow-status-p %status)
-        (slow-status-status %status)
-        %status)))
-
-(defun convert-to-slow-status (future stopping-conditions)
-  (let (slow)
-    (loop
-      (let ((%status (future-%status future)))
-        (when (slow-status-p %status)
-          (return))
-        (when (member %status stopping-conditions)
-          (return %status))
-        (unless slow
-          (setf slow (make-slow-status)))
-        (setf (slow-status-status slow) %status)
-        (when (eql (cas (future-%status future) %status slow)
-                   %status)
-          (return))))))
-
-(defun wait (future &rest stopping-conditions)
-  (declare (dynamic-extent stopping-conditions))
-  (let ((status (convert-to-slow-status future stopping-conditions)))
-    (when status (return-from wait status)))
-  (let* ((slow-status (future-%status future))
-         (lock        (slow-status-lock slow-status))
-         (cvar        (slow-status-cvar slow-status)))
-    (declare (type slow-status slow-status))
-    (with-mutex (lock)
-      (loop
-        (let ((status (slow-status-status slow-status)))
-          (when (member status stopping-conditions)
-            (return status)))
-        (condition-wait cvar lock)))))
-
-(defun status-upgrade (future to &rest from)
-  (declare (dynamic-extent from))
-  (loop
-    (let ((%status (future-%status future)))
-      (when (slow-status-p %status)
-        (return))
-      (when (or (not (member %status from))
-                (eql (compare-and-swap (future-%status future)
-                                       %status to)
-                     %status))
-        (return-from status-upgrade %status))))
-  (let ((slow-status (future-%status future)))
-    (with-mutex ((slow-status-lock slow-status))
-      (let ((status (slow-status-status slow-status)))
-        (when (member status from)
-          (setf (slow-status-status slow-status) to)
-          (when (or (eql to :done) (eql to :cancelled))
-            (setf (future-%status future) to))
-          (condition-broadcast (slow-status-cvar slow-status)))
-        status))))
+(status:define-status-type slow-status
+    (:fast-type future
+     :status-type status
+     :default-status :orphan
+     :final-states (:done :cancelled))
+    future-%status status wait status-upgrade)
 
 (defun execute (future)
   (unless (eql (status-upgrade future :running :waiting)
