@@ -74,9 +74,8 @@
 (defun worker-id ()
   *worker-id*)
 
-(defun worker-count ()
-  (let ((queue (current-queue)))
-    (and queue (queue-nthread queue))))
+(defun worker-count (&optional (queue (current-queue)))
+  (and queue (queue-nthread queue)))
 
 (defun loop-get-task (state lock cvar queue stacks i
                       &optional max-time)
