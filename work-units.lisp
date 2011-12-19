@@ -20,7 +20,7 @@
   ;; count not done yet, initially (length subtasks)
   (remaining (error "Missing arg") :type word)
   (subtask-function nil            :type (or null symbol function))
-  (subtasks  (error "Missing arg") :type (simple-array (or symbol function) 1))
+  (subtasks  (error "Missing arg") :type simple-vector)
   (cleanup   nil                   :type (or list symbol function)))
 
 (deftype task-designator ()

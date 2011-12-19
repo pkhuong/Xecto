@@ -187,21 +187,32 @@
         (future-value future)
         future)))
 
-(defun parallel:reduce (function arg seed &key (wait t))
+(defun parallel:reduce (function arg seed &key (wait t) key)
   (let* ((arg (coerce arg 'simple-vector))
          (function (if (functionp function)
                        function
                        (fdefinition function)))
          (accumulators (make-array (work-queue:worker-count parallel-future:*context*)
                                    :initial-element seed))
-         (future (parallel:dotimes (i (length arg)
+         (future
+           (if key
+               (let ((key (if (functionp key) key (fdefinition key))))
+                 (parallel:dotimes (i (length arg)
                                       (reduce function accumulators
                                               :initial-value seed))
                    (let ((idx (work-queue:worker-id)))
                      (setf (aref accumulators idx)
                            (funcall function
                                     (aref accumulators idx)
-                                    (aref arg i)))))))
+                                    (funcall key (aref arg i)))))))
+               (parallel:dotimes (i (length arg)
+                                    (reduce function accumulators
+                                            :initial-value seed))
+                 (let ((idx (work-queue:worker-id)))
+                   (setf (aref accumulators idx)
+                         (funcall function
+                                  (aref accumulators idx)
+                                  (aref arg i))))))))
     (if wait
         (future-value future)
         future)))
