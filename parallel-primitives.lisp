@@ -246,7 +246,8 @@
                                   &key (group-test #'eql)
                                        group-by
                                        (wait t)
-                                       (master-table nil))
+                                       (master-table nil)
+                                       fancy)
   (let* ((arg     (coerce sequence 'simple-vector))
          (nthread (work-queue:worker-count
                    (work-queue:current-queue
@@ -288,26 +289,46 @@
                                         (values vector (clean-table master)))
                      (let* ((cache  (aref vector i))
                             (values (cdr cache)))
-                       (setf (cdr cache) (reduce reduce values))))))))
+                       (setf (cdr cache) (reduce reduce values)))))))
+             (accumulate (table key val)
+               (declare (type hash-table table))
+               (multiple-value-bind (acc foundp)
+                   (gethash key table)
+                 (setf (gethash key table)
+                       (if foundp
+                           (funcall reduce acc val)
+                           val)))))
+      (declare (inline accumulate))
       (let ((future (parallel:dotimes (i (length arg) (aggregate-keys))
                       (let* ((x     (aref arg i))
                              (table (aref tables (work-queue:worker-id))))
                         (declare (type hash-table table))
-                        (multiple-value-bind (val key)
-                            (if group-by
-                                (values (funcall map x)
-                                        (funcall group-by x))
-                                (funcall map x))
-                          (multiple-value-bind (acc foundp)
-                              (gethash key table)
-                            (setf (gethash key table)
-                                  (if foundp
-                                      (funcall reduce acc val)
-                                      val))))))))
+                        (if fancy
+                            (funcall map x (lambda (key value)
+                                             (accumulate table key value)))
+                            (multiple-value-bind (val key)
+                                (if group-by
+                                    (values (funcall map x)
+                                            (funcall group-by x))
+                                    (funcall map x))
+                              (accumulate table key val)))))))
         (if wait
             (future-value (future-value future))
             future)))))
+
 #||
+
+(defun count-words (documents)
+  (parallel:map-group-reduce documents
+                             (lambda (document accumulator)
+                               (declare (type simple-vector document)
+                                        (type (function (t t) (values t &optional)) accumulator))
+                               (map nil (lambda (word)
+                                          (funcall accumulator word 1))
+                                    document))
+                             #'+
+                             :group-test #'equal
+                             :fancy t))
 
 (deftype index ()
   `(mod ,most-positive-fixnum))
