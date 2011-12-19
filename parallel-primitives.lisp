@@ -6,7 +6,7 @@
            "MAP-GROUP-REDUCE"))
 
 (defpackage "PARALLEL-IMPL"
-  (:use "CL")
+  (:use "CL" "SB-EXT")
   (:import-from "PARALLEL" "PROMISE" "PROMISE-VALUE"
                 "FUTURE" "FUTURE-VALUE"))
 
@@ -193,6 +193,7 @@
                                (declare (ignorable ,var))
                                (progn ,result))))))))
 
+(declaim (maybe-inline parallel:map parallel:reduce parallel:map-group-reduce))
 (defun parallel:map (type function arg &key (wait t))
   (let* ((arg (coerce arg 'simple-vector))
          (function (if (functionp function)
@@ -245,7 +246,7 @@
                                   &key (group-test #'eql)
                                        group-by
                                        (wait t)
-                                       (master-table t))
+                                       (master-table nil))
   (let* ((arg     (coerce sequence 'simple-vector))
          (nthread (work-queue:worker-count
                    (work-queue:current-queue
@@ -259,10 +260,14 @@
     (declare (type (simple-array hash-table 1) tables))
     (labels ((clean-table (table)
                (declare (type hash-table table))
-               (maphash (lambda (k v)
-                          (setf (gethash k table) (cdr v)))
-                        table)
-               table)
+               (ecase master-table
+                 ((nil) nil)
+                 (:quick table)
+                 (t
+                  (maphash (lambda (k v)
+                             (setf (gethash k table) (cdr v)))
+                           table)
+                  table)))
              (aggregate-keys ()
                (let* ((size   (reduce #'max tables :key #'hash-table-count))
                       (master (make-hash-table :test group-test :size size))
@@ -278,11 +283,9 @@
                                      table))
                       tables)
                  (let ((vector (coerce (shiftf vector nil) 'simple-vector)))
+                   (declare (type (simple-array cons 1) vector))
                    (parallel:dotimes (i (length vector)
-                                        (if master-table
-                                            (values vector
-                                                    (clean-table master))
-                                            vector))
+                                        (values vector (clean-table master)))
                      (let* ((cache  (aref vector i))
                             (values (cdr cache)))
                        (setf (cdr cache) (reduce reduce values))))))))
