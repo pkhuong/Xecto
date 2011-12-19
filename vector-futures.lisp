@@ -26,9 +26,18 @@
 
 (defstruct (vector-future
             (:include parallel-future:future))
-  (refcount 0 :type word)
-  (size     0 :type (and unsigned-byte fixnum))
-  (data   nil :type (or null (simple-array double-float 1))))
+  (refcount        0 :type word)
+  (size            0 :type (and unsigned-byte fixnum))
+  (%data         nil :type (or null (simple-array double-float 1)))
+  (handle (list nil) :type cons :read-only t))
+
+(defun vector-future-data (vector-future)
+  (vector-future-%data vector-future))
+
+(defun (setf vector-future-data) (value vector-future)
+  (setf (vector-future-%data vector-future) value
+        (car (vector-future-handle vector-future) value))
+  value)
 
 (defun data (vector-future)
   (declare (type vector-future vector-future))
@@ -48,6 +57,15 @@
         (sb-kernel:%shrink-vector data 0))))
   nil)
 
+(defun finalize-vector-future (future)
+  (declare (type vector-future future))
+  (finalize future (let ((handle (vector-future-handle future)))
+                     (lambda ()
+                       (let ((data (shiftf (car handle) nil)))
+                         (when data
+                           (sb-kernel:%shrink-vector data 0))))))
+  future)
+
 (defun make-allocator (allocation)
   ;; finalize this
   (etypecase allocation
@@ -55,10 +73,8 @@
      (lambda (data)
        (declare (type vector-future data))
        (retain data) ;; maybe we should just abort here...
-       (let ((vector (make-array allocation :element-type 'double-float)))
-         (setf (vector-future-data data) vector)
-         (finalize data (lambda ()
-                          (sb-kernel:%shrink-vector vector 0))))
+       (setf (vector-future-data data)
+             (make-array allocation :element-type 'double-float))
        nil))
     (vector-future
      (retain allocation)
@@ -70,16 +86,12 @@
          (cond ((= 1 (vector-future-refcount allocation))
                 (shiftf (vector-future-data data)
                         (vector-future-data allocation)
-                        nil)
-                (cancel-finalization allocation))
+                        nil))
                (t
                 (setf (vector-future-data data)
                       (make-array (length source)
                                   :element-type 'double-float
                                   :initial-contents source))))
-         (let ((vector (vector-future-data data)))
-           (finalize data (lambda ()
-                            (sb-kernel:%shrink-vector vector 0))))
          (release allocation))
        nil))))
 
@@ -97,19 +109,22 @@
   (let ((size (if (vector-future-p allocation)
                   (vector-future-size allocation)
                   allocation)))
-    (apply 'parallel-future:make
-           (coerce (remove-duplicates
-                    (if (vector-future-p allocation)
-                        (adjoin allocation dependencies)
-                        dependencies))
-                   'simple-vector) 
-           (make-allocator allocation)
-           (coerce tasks 'simple-vector)
-           (make-deallocator dependencies)
-           (or constructor #'make-vector-future)
-           :size     size
-           :refcount 1
-           arguments)))
+    (finalize-vector-future
+     (apply 'parallel-future:make
+            (coerce (remove-duplicates
+                     (if (vector-future-p allocation)
+                         (adjoin allocation dependencies)
+                         dependencies))
+                    'simple-vector) 
+            (make-allocator allocation)
+            (coerce tasks 'simple-vector)
+            (make-deallocator dependencies)
+            (or constructor #'make-vector-future)
+            :size     size
+            :refcount 1
+            :%data    nil
+            :handle   (list nil)
+            arguments))))
 
 #||
 ;; demo

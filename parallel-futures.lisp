@@ -68,17 +68,17 @@
 
 (defun make (dependencies setup subtasks cleanup &optional constructor &rest arguments)
   (declare (type simple-vector dependencies subtasks))
-  (let* ((count        (length subtasks))
-         (future       (apply (or constructor #'make-future)
-                              :function #'future-push-self
-                              :dependencies dependencies
-                              :setup     setup
-                              :subtasks  subtasks
-                              :waiting   count
-                              :remaining count
-                              :cleanup   (if (listp cleanup)
-                                             (append cleanup (list #'future:mark-done))
-                                             (list cleanup #'future:mark-done))
-                              arguments)))
+  (let* ((count  (length subtasks))
+         (future (apply (or constructor #'make-future)
+                        :function #'future-push-self
+                        :dependencies dependencies
+                        :setup     setup
+                        :subtasks  subtasks
+                        :waiting   count
+                        :remaining count
+                        :cleanup   (if (listp cleanup)
+                                       (append cleanup (list #'future:mark-done))
+                                       (list cleanup #'future:mark-done))
+                        arguments)))
     (future:mark-dependencies future)
     (future:thaw future)))

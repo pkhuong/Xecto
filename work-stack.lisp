@@ -120,8 +120,9 @@
                        (let ((bulk (cdr x)))
                          (when (and bulk
                                     (plusp (bulk-task-waiting bulk)))
-                           (return-from steal bulk))
-                         (setf (cdr x) nil))
+                           (return-from steal bulk)))
+                       (setf (cdr x) nil)
+                       (setf start position)
                        (when (eql x (cas (svref stacklet position) x nil))
                          (incf start)))
                       ((eql x (cas (svref stacklet position) x nil))
@@ -171,6 +172,7 @@
                           (svref stacklet position) nil
                           (stack-top stack) (+ (* major +stacklet-size+)
                                                position)))
+                   (barrier (:memory))
                    ((or task symbol function)
                     (setf (stack-top stack) (+ (* major +stacklet-size+)
                                                position))

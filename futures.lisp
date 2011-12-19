@@ -206,9 +206,8 @@
                           ;; cancel self?
                           (atomic-decf (future-depcount future))
                           (error "Dependency cancelled"))
-                         ((eql (compare-and-swap (future-dependents dep)
-                                                 dependents
-                                                 cons)
+                         ((eql (cas (future-dependents dep)
+                                    dependents cons)
                                dependents)
                           (return-from mark-dep))))))))
       (declare (dynamic-extent #'mark-dep))
@@ -224,19 +223,15 @@
           (loop
             (let ((dependents (future-dependents future)))
               (when (or (eql dependents :done)
-                         (eql dependents :cancelled))
+                        (eql dependents :cancelled))
                 (return-from mark-done))
-              (when (eql (compare-and-swap (future-dependents future)
-                                           dependents :done)
+              (when (eql (cas (future-dependents future)
+                              dependents :done)
                          dependents)
                 (return dependents))))))
-    (map-into dependents
-              (lambda (wp)
-                (let ((value (weak-pointer-value wp)))
-                  (when (and value
-                             (= 1 (atomic-decf (future-depcount value)))
-                             (eql :waiting (status value)))
-                    (execute value)))
-                nil)
-              dependents)
-    nil))
+    (dolist (wp dependents)
+      (let ((value (weak-pointer-value wp)))
+        (when (and value
+                   (= 1 (atomic-decf (future-depcount value)))
+                   (eql :waiting (status value)))
+          (execute value))))))
