@@ -36,7 +36,7 @@
 
 (defun (setf vector-future-data) (value vector-future)
   (setf (vector-future-%data vector-future)        value
-        (car (vector-future-handle vector-future)) value)
+        (car (vector-future-handle vector-future)) (make-weak-pointer value))
   value)
 
 (defun data (vector-future)
@@ -61,9 +61,10 @@
   (declare (type vector-future future))
   (finalize future (let ((handle (vector-future-handle future)))
                      (lambda ()
-                       (let ((data (shiftf (car handle) nil)))
-                         (when data
-                           (sb-kernel:%shrink-vector data 0))))))
+                       (let* ((data   (shiftf (car handle) nil))
+                              (vector (and data (weak-pointer-value data))))
+                         (when vector
+                           (sb-kernel:%shrink-vector vector 0))))))
   future)
 
 (defun make-allocator (allocation)
