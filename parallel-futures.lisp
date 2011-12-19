@@ -26,11 +26,13 @@
 
 (defmacro with-context ((count) &body body)
   (let ((context (gensym "CONTEXT")))
-    `(let* ((,context  (work-queue:make ,count))
-            (*context* ,context))
+    `(let* ((,context nil))
        (unwind-protect (progn
-                         ,@body)
-         (work-queue:stop ,context)))))
+                         (setf ,context (work-queue:make ,count))
+                         (let ((*context* ,context))
+                           ,@body))
+         (when ,context
+           (work-queue:stop ,context))))))
 
 (defstruct (future
             (:include future:future))
