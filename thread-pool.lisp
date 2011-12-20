@@ -88,9 +88,6 @@
              (when task
                (return-from loop-get-task task)))))
     (declare (inline try))
-    (when (and max-time (zerop max-time))
-      (try)
-      (return-from loop-get-task :timeout))
     (let ((timeout 1e-4)
           (total   0d0)
           (fast    t))
@@ -140,12 +137,16 @@
                           (return-from %worker-loop)))))
       (declare (inline poll work))
       (work)
-      (let ((task (loop-get-task state lock cvar
-                                 queue stacks i
-                                 wait-time)))
-        (unless (and task queue)
-          (return-from %worker-loop))
-        (cond (poll-function
+      (let ((task (if (and wait-time (zerop wait-time))
+                      (and (not (eql (car state) :done))
+                           (grab-task queue stacks i))
+                      (loop-get-task state lock cvar
+                                     queue stacks i
+                                     wait-time))))
+        (cond ((not (and task queue))
+               (poll)
+               (return-from %worker-loop))
+              (poll-function
                (when (eq task :timeout)
                  (poll)
                  (return-from %worker-loop)))
