@@ -55,13 +55,17 @@
   (let ((task (sb-queue:dequeue queue)))
     (when task
       (return-from grab-task task)))
-  (let ((n (length stacks)))
-    (dotimes (j n)
-      (let* ((i    (mod (+ i j) n))
-             (task (or (work-stack:steal (aref stacks i))
-                       (sb-queue:dequeue queue))))
-        (when task
-          (return-from grab-task task))))))
+  (let* ((n            (length stacks))
+         (power-of-two (ash 1 (integer-length (1- n)))))
+    (dotimes (j power-of-two)
+      (let ((i (logxor i j)))
+        (when (>= i n)
+          (go skip))
+        (let ((task (or (work-stack:steal (aref stacks i))
+                        (sb-queue:dequeue queue))))
+          (when task
+            (return-from grab-task task))))
+      skip)))
 
 (defvar *worker-id* nil)
 (defvar *worker-hint* 0)
