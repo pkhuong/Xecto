@@ -31,8 +31,11 @@
     ((or symbol function)
      (funcall task))
     (task
-     (prog1 (funcall (task-function task) task)
-       (setf (task-function task) nil)))))
+     (let ((function (task-function task)))
+       (when (and function
+                  (eql (cas (task-function task) function nil)
+                       function))
+         (funcall function task))))))
 
 (declaim (inline %bulk-find-task))
 (defun %bulk-find-task (bulk hint)
