@@ -8,14 +8,15 @@
 (defpackage "PARALLEL-IMPL"
   (:use "CL" "SB-EXT")
   (:import-from "PARALLEL" "PROMISE" "PROMISE-VALUE" "PROMISE-VALUE*"
-                "FUTURE" "FUTURE-VALUE"))
+                "FUTURE" "FUTURE-VALUE" "FUTURE-VALUE*"
+                "BIND" "MAP-GROUP-REDUCE"))
 
 (in-package "PARALLEL-IMPL")
 
 (deftype status ()
   `(member :waiting :done))
 
-(defstruct (parallel:promise
+(defstruct (promise
             (:constructor make-promise (function))
             (:include work-stack:task))
   %values
@@ -31,7 +32,7 @@
     %promise-wait
     %promise-upgrade)
 
-(defun parallel:promise (thunk &rest args)
+(defun promise (thunk &rest args)
   (let ((promise
           (make-promise (lambda (promise)
                           (declare (type promise promise))
@@ -42,7 +43,7 @@
                                    parallel-future:*context*))
     promise))
 
-(defun parallel:promise-value (promise)
+(defun promise-value (promise)
   (declare (type promise promise))
   (when (work-queue:worker-id)
     (work-queue:progress-until
@@ -51,18 +52,19 @@
   (%promise-wait promise :done)
   (values-list (promise-%values promise)))
 
-(defun parallel:promise-value* (promise)
+(defun promise-value* (promise)
   (unless (promise-p promise)
-    (return-from parallel:promise-value* promise))
-  (multiple-value-call (lambda (&optional (value nil value-p) &rest args)
-                         (cond ((promise-p value)
-                                (parallel:promise-value* value))
-                               (value-p
-                                (multiple-value-call #'values
-                                  value (values-list args)))
-                               (t
-                                (values))))
-    (parallel:promise-value promise)))
+    (return-from promise-value* promise))
+  (loop
+    (multiple-value-call (lambda (&optional (value nil value-p) &rest args)
+                           (cond ((promise-p value)
+                                  (setf promise value))
+                                 (value-p
+                                  (return (multiple-value-call #'values
+                                            value (values-list args))))
+                                 (t
+                                  (return (values)))))
+      (promise-value promise))))
 
 (defmacro parallel:let ((&rest bindings) &body body)
   (let* ((parallelp   t)
@@ -89,7 +91,7 @@
                                 collect `(promise-value ,temp))))
            (,function ,@values)))))
 
-(defstruct (parallel:future
+(defstruct (future
             (:include parallel-future:future))
   %values)
 
@@ -101,7 +103,7 @@
                                    x))
                        futures)))
 
-(defun parallel:future (dependencies callback &key subtasks cleanup)
+(defun future (dependencies callback &key subtasks cleanup)
   (declare (type simple-vector dependencies)
            (type (or null simple-vector) subtasks))
   (let ((future (parallel-future:make
@@ -123,7 +125,7 @@
                                   parallel-future:*context*))
     future))
 
-(defun parallel:future-value (future)
+(defun future-value (future)
   (declare (type future future))
   (when (work-queue:worker-id)
     (work-queue:progress-until (lambda ()
@@ -131,9 +133,9 @@
   (future:wait future :done)
   (values-list (future-%values future)))
 
-(defun parallel:future-value* (future)
+(defun future-value* (future)
   (unless (future-p future)
-    (return-from parallel:future-value* future))
+    (return-from future-value* future))
   (loop
     (multiple-value-call
         (lambda (&optional (value nil value-p) &rest values)
@@ -144,7 +146,7 @@
                            value (values-list values))))
                 (t
                  (return (values)))))
-      (parallel:future-value future))))
+      (future-value future))))
 
 (defmacro parallel:bind ((&rest bindings)
                          &body body)
@@ -270,12 +272,12 @@
         (future-value future)
         future)))
 
-(defun parallel:map-group-reduce (sequence map reduce
-                                  &key (group-test #'eql)
-                                       group-by
-                                       (wait t)
-                                       (master-table nil)
-                                       fancy)
+(defun map-group-reduce (sequence map reduce
+                         &key (group-test #'eql)
+                              group-by
+                              (wait t)
+                              (master-table nil)
+                              fancy)
   (let* ((arg     (coerce sequence 'simple-vector))
          (nthread (work-queue:worker-count
                    (work-queue:current-queue
@@ -341,7 +343,7 @@
                                     (funcall map x))
                               (accumulate table key val)))))))
         (if wait
-            (future-value (future-value future))
+            (future-value* future)
             future)))))
 
 #||
