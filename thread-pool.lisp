@@ -93,23 +93,23 @@
           (fast    t))
       (declare (single-float timeout)
                (double-float total))
-      (with-mutex (lock)
-        (loop
-          (if fast
-              (dotimes (i 128)
-                (try)
-                (loop repeat (* i 128)
-                      do (spin-loop-hint)))
-              (try))
-          ;; Don't do this at home.
-          (setf fast nil)
-          (if (condition-wait cvar lock :timeout timeout)
-              (setf fast t)
-              (grab-mutex lock))
-          (when (and max-time
-                     (> (incf total timeout) max-time))
-            (return :timeout))
-          (setf timeout (min 1.0 (* timeout 1.1))))))))
+      (loop
+       (if fast
+           (dotimes (i 128)
+             (try)
+             (loop repeat (* i 128)
+                   do (spin-loop-hint)))
+           (try))
+        ;; Don't do this at home.
+       (setf fast nil)
+       (with-mutex (lock)
+         (if (condition-wait cvar lock :timeout timeout)
+             (setf fast t)
+             (grab-mutex lock)))
+       (when (and max-time
+                  (> (incf total timeout) max-time))
+         (return :timeout))
+       (setf timeout (min 1.0 (* timeout 1.1)))))))
 
 (declaim (inline %worker-loop))
 (defun %worker-loop (weak-queue index hint &optional poll-function wait-time)
@@ -242,22 +242,18 @@
   (declare (type task-designator task)
            (type queue queue))
   (assert (alive-p queue))
-  (map nil #'grab-mutex (queue-locks queue))
   (sb-queue:enqueue task (queue-queue queue))
   (condition-broadcast (queue-cvar queue))
-  (map nil #'release-mutex (queue-locks queue))
   nil)
 
 (defun enqueue-all (tasks &optional (queue (current-queue)))
   (declare (type queue queue))
   (assert (alive-p queue))
-  (map nil #'grab-mutex (queue-locks queue))
   (let ((queue (queue-queue queue)))
     (map nil (lambda (task)
                (sb-queue:enqueue task queue))
          tasks))
   (condition-broadcast (queue-cvar queue))
-  (map nil #'release-mutex (queue-locks queue))
   nil)
 
 (defun push-self (task &optional (queue (current-queue)))
