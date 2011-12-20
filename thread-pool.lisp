@@ -138,12 +138,11 @@
       (declare (inline poll work))
       (work)
       (let ((task (if (and wait-time (zerop wait-time))
-                      (and (not (eql (car state) :done))
-                           (grab-task queue stacks i))
+                      (grab-task queue stacks i)
                       (loop-get-task state lock cvar
                                      queue stacks i
                                      wait-time))))
-        (cond ((not (and task queue))
+        (cond ((not task)
                (poll)
                (return-from %worker-loop))
               (poll-function
@@ -190,15 +189,12 @@
                          (error "Not in recursive wait?!")))))
     (tagbody
        retry
-       (labels ((check ()
-                  (let ((value (funcall condition)))
-                    (when value
-                      (return-from progress-until value))))
-                (inner ()
-                  (%worker-loop weak-queue i hint #'check 0)))
-         (declare (notinline inner)
-                  (inline check))
-         (inner)
+       (flet ((check ()
+                (let ((value (funcall condition)))
+                  (when value
+                    (return-from progress-until value)))))
+         (declare (inline check))
+         (%worker-loop weak-queue i hint #'check 0)
          (unless (eql :done (car state))
            (go retry))
          (check)))))
