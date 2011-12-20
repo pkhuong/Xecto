@@ -120,6 +120,8 @@
   (values-list (future-%values future)))
 
 (defun parallel:future-value* (future)
+  (unless (future-p future)
+    (return-from parallel:future-value* future))
   (loop
     (multiple-value-call
         (lambda (&optional (value nil value-p) &rest values)
@@ -130,7 +132,7 @@
                            value (values-list values))))
                 (t
                  (return (values)))))
-      (future-value future))))
+      (parallel:future-value future))))
 
 (defmacro parallel:bind ((&rest bindings)
                          &body body)
@@ -143,7 +145,7 @@
               (lambda ,(mapcar #'first bindings)
                 ,@body)))))
 
-(defconstant +chunk-size+ 128)
+(defconstant +chunk-size+ 1024)
 
 (defstruct (parallel:stream
             (:constructor %make-stream))
@@ -185,7 +187,7 @@
              (prog1 stream
                (setf (stream-index stream) index))
              (setf (stream-%next stream)
-                   (future-value (stream-next stream)))))))
+                   (parallel:future-value* (stream-next stream)))))))
 
 (defun parallel:tail-prefetch (stream)
   (when (and (stream-p stream)
