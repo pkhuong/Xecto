@@ -113,6 +113,7 @@
 
 (declaim (inline %worker-loop))
 (defun %worker-loop (weak-queue index hint &optional poll-function wait-time)
+  (declare (muffle-conditions code-deletion-note))
   (let* ((wait-time (and poll-function (or wait-time 1)))
          (wqueue    (or (weak-pointer-value weak-queue)
                         (return-from %worker-loop)))
