@@ -482,8 +482,7 @@
     (declare (type (simple-array fixnum 1) vec))
     (time (locally (declare (optimize speed (space 0))
                             (inline sort))
-            (sort vec #'<)))
-    
+            (sort vec #'<)))    
     (loop for i below (1- (length vec))
             do (assert (<= (aref vec i) (aref vec (1+ i)))))))
 
