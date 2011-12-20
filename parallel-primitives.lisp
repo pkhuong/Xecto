@@ -245,9 +245,10 @@
          (function (if (functionp function)
                        function
                        (fdefinition function)))
-         (accumulators (make-array (work-queue:worker-count
-                                    (work-queue:current-queue
-                                     parallel-future:*context*))
+         (accumulators (make-array (* 16 (or (work-queue:worker-count
+                                              (work-queue:current-queue
+                                               parallel-future:*context*))
+                                             (error "No current queue")))
                                    :initial-element seed))
          (future
            (if key
@@ -255,7 +256,7 @@
                  (parallel:dotimes (i (length arg)
                                       (reduce function accumulators
                                               :initial-value seed))
-                   (let ((idx (work-queue:worker-id)))
+                   (let ((idx (* 16 (work-queue:worker-id))))
                      (setf (aref accumulators idx)
                            (funcall function
                                     (aref accumulators idx)
@@ -453,9 +454,19 @@
                       (aref vector (random (+ i 1)))))
     vector))
 
+(defun test-partition (size)
+  (let ((vec (shuffle (let ((i 0))
+                        (map-into (make-array size
+                                              :element-type 'fixnum)
+                                  (lambda ()
+                                    (incf i)))))))
+    (time (partition vec 0 size (truncate size 2)))
+    nil))
+
 (defun test-pqsort (nproc size)
   (let ((vec (shuffle (let ((i 0))
-                        (map-into (make-array size :element-type 'fixnum)
+                        (map-into (make-array size
+                                              :element-type 'fixnum)
                                   (lambda ()
                                     (incf i)))))))
     (parallel-future:with-context (nproc)
