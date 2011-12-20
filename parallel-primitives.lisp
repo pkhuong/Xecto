@@ -1,6 +1,6 @@
 (defpackage "PARALLEL"
   (:use)
-  (:export "PROMISE" "PROMISE-VALUE" "LET"
+  (:export "PROMISE" "PROMISE-VALUE" "PROMISE-VALUE*" "LET"
            "FUTURE" "FUTURE-VALUE" "FUTURE-VALUE*" "BIND"
            "STREAM" "HEAD" "TAIL" "TAIL!" "TAIL-PREFETCH" "UNFOLD" "SCAN" "SCAN*" "FOREACH" "FOLD"
            "DOTIMES" "MAP" "REDUCE"
@@ -8,7 +8,7 @@
 
 (defpackage "PARALLEL-IMPL"
   (:use "CL" "SB-EXT")
-  (:import-from "PARALLEL" "PROMISE" "PROMISE-VALUE"
+  (:import-from "PARALLEL" "PROMISE" "PROMISE-VALUE" "PROMISE-VALUE*"
                 "FUTURE" "FUTURE-VALUE"))
 
 (in-package "PARALLEL-IMPL")
@@ -51,6 +51,19 @@
        (eql :done (promise-status promise)))))
   (%promise-wait promise :done)
   (values-list (promise-%values promise)))
+
+(defun parallel:promise-value* (promise)
+  (unless (promise-p promise)
+    (return-from parallel:promise-value* promise))
+  (multiple-value-call (lambda (&optional (value nil value-p) &rest args)
+                         (cond ((promise-p value)
+                                (parallel:promise-value* value))
+                               (value-p
+                                (multiple-value-call #'values
+                                  value (values-list args)))
+                               (t
+                                (values))))
+    (parallel:promise-value promise)))
 
 (defmacro parallel:let ((&rest bindings) &body body)
   (let* ((parallelp   t)
@@ -151,7 +164,7 @@
             (:constructor %make-stream))
   (index   0 :type (mod #.+chunk-size+))
   (chunk nil :type simple-vector :read-only t)
-  (%next nil :type (or null function parallel:stream parallel:future)))
+  (%next nil :type (or null function parallel:stream parallel:promise)))
 
 (defun make-stream (index chunk %next)
   (and (< index (length chunk))
@@ -177,7 +190,7 @@
                            :chunk chunk
                            :%next (stream-%next stream))
              (setf (stream-%next stream)
-                   (future-value (stream-next stream)))))))
+                   (promise-value* (stream-next stream)))))))
 
 (defun parallel:tail! (stream)
   (and (stream-p stream)
@@ -187,7 +200,7 @@
              (prog1 stream
                (setf (stream-index stream) index))
              (setf (stream-%next stream)
-                   (parallel:future-value* (stream-next stream)))))))
+                   (promise-value* (stream-next stream)))))))
 
 (defun parallel:tail-prefetch (stream)
   (when (and (stream-p stream)
@@ -216,8 +229,7 @@
                    (car cache)
                    (setf (values (car cache) (cdr cache))
                          (values
-                          (parallel:future
-                           #()
+                          (parallel:promise
                            (lambda ()
                              (multiple-value-bind (chunk live)
                                  (make-chunk)
@@ -256,18 +268,20 @@
                    (car cache)
                    (setf (values (car cache) (cdr cache))
                          (values
-                          (parallel:bind ((next (stream-next stream)))
+                          (let ((next (promise-value* (stream-next stream))))
                             (and next
-                                 (multiple-value-bind (chunk live)
-                                     (make-chunk (stream-index stream) (stream-chunk next))
-                                   (setf stream next)
-                                   (and (plusp (length chunk))
-                                        (make-stream
-                                         0 chunk
-                                         (and live (stream-next next)
-                                              (let ((cache (list nil)))
-                                                (lambda ()
-                                                  (next cache)))))))))
+                                 (promise
+                                  (lambda ()
+                                    (multiple-value-bind (chunk live)
+                                        (make-chunk (stream-index stream) (stream-chunk next))
+                                      (setf stream next)
+                                      (and (plusp (length chunk))
+                                           (make-stream
+                                            0 chunk
+                                            (and live (stream-next next)
+                                                 (let ((cache (list nil)))
+                                                   (lambda ()
+                                                     (next cache)))))))))))
                           t)))))
       (make-stream 0 (make-chunk (stream-index stream)
                                  (stream-chunk stream))
@@ -283,8 +297,7 @@
                              (values seed seed finished)))
                   seed))
 
-(defun parallel:fold (stream function seed &key (wait t))
-  (declare (type parallel:stream stream))
+(defun parallel:fold (stream function seed)
   (let ((function (if (functionp function)
                       function
                       (fdefinition function))))
@@ -299,21 +312,17 @@
                      (return nil)))
                      finally (return t)))
              (iter (stream)
-               (declare (type parallel:stream stream))
+               (declare (type (or null parallel:stream) stream))
+               (unless stream
+                 (return-from iter stream))
                (let ((continue (consume-chunk (stream-index stream)
                                               (stream-chunk stream))))
                  (if (not continue)
                      seed
-                     (parallel:bind ((next (stream-next stream)))
-                       (if next
-                           (iter next)
-                           seed))))))
-      (let ((future (iter stream)))
-        (if wait
-            (parallel:future-value* future)
-            future)))))
+                     (iter (promise-value* (stream-next stream)))))))
+      (iter stream))))
 
-(defun parallel:foreach (stream function &key (for-effect nil) (wait t))
+(defun parallel:foreach (stream function &key (for-effect nil))
   (declare (inline parallel:scan parallel:fold))
   (let ((function (if (functionp function)
                       function
@@ -321,7 +330,7 @@
     (cond (for-effect
            (parallel:fold stream (lambda (value seed) seed
                                    (funcall function value))
-                          nil :wait wait)
+                          nil)
            nil)
           (t
            (parallel:scan stream (lambda (value seed) seed
