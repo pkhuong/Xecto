@@ -2,7 +2,7 @@
   (:use)
   (:export "PROMISE" "PROMISE-VALUE" "LET"
            "FUTURE" "FUTURE-VALUE" "FUTURE-VALUE*" "BIND"
-           "STREAM" "HEAD" "TAIL" "UNFOLD" "SCAN" "SCAN*" "FOREACH" "FOLD"
+           "STREAM" "HEAD" "TAIL" "TAIL!" "TAIL-PREFETCH" "UNFOLD" "SCAN" "SCAN*" "FOREACH" "FOLD"
            "DOTIMES" "MAP" "REDUCE"
            "MAP-GROUP-REDUCE"))
 
@@ -148,7 +148,7 @@
 (defstruct (parallel:stream
             (:constructor %make-stream))
   (index   0 :type (mod #.+chunk-size+))
-  (chunk nil :type simple-vector)
+  (chunk nil :type simple-vector :read-only t)
   (%next nil :type (or null function parallel:stream parallel:future)))
 
 (defun make-stream (index chunk %next)
@@ -177,6 +177,21 @@
              (setf (stream-%next stream)
                    (future-value (stream-next stream)))))))
 
+(defun parallel:tail! (stream)
+  (and (stream-p stream)
+       (let ((index (1+ (stream-index stream)))
+             (chunk (stream-chunk stream)))
+         (if (< index (length chunk))
+             (prog1 stream
+               (setf (stream-index stream) index))
+             (setf (stream-%next stream)
+                   (future-value (stream-next stream)))))))
+
+(defun parallel:tail-prefetch (stream)
+  (when (and (stream-p stream)
+             (functionp (stream-%next stream)))
+    (stream-next stream))
+  nil)
 
 (declaim (maybe-inline parallel:unfold
                        parallel:scan* parallel:scan parallel:foreach
