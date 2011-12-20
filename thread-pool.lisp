@@ -88,6 +88,9 @@
              (when task
                (return-from loop-get-task task)))))
     (declare (inline try))
+    (when (and max-time (zerop max-time))
+      (try)
+      (return-from loop-get-task :timeout))
     (let ((timeout 1e-4)
           (total   0d0)
           (fast    t))
@@ -179,24 +182,22 @@
   (let* ((condition (if (functionp condition)
                         condition (fdefinition condition)))
          (i         (worker-id))
+         (hint      *worker-hint*)
          (weak-queue *current-queue*)
          (state     (queue-state
                      (or (current-queue)
-                         (error "Not in recursive wait?!"))))
-         (wait-time 1d-3))
+                         (error "Not in recursive wait?!")))))
     (tagbody
        retry
        (labels ((check ()
                   (let ((value (funcall condition)))
-                    (when value (return-from progress-until value))))
+                    (when value
+                      (return-from progress-until value))))
                 (inner ()
-                  (%worker-loop weak-queue i *worker-hint*
-                                #'check wait-time)))
+                  (%worker-loop weak-queue i hint #'check 0)))
          (declare (notinline inner)
                   (inline check))
-         (check)
          (inner)
-         (sb-sys:scrub-control-stack)
          (unless (eql :done (car state))
            (go retry))
          (check)))))
