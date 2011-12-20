@@ -58,7 +58,8 @@
   (let ((n (length stacks)))
     (dotimes (j n)
       (let* ((i    (mod (+ i j) n))
-             (task (work-stack:steal (aref stacks i))))
+             (task (or (work-stack:steal (aref stacks i))
+                       (sb-queue:dequeue queue))))
         (when task
           (return-from grab-task task))))))
 
@@ -142,8 +143,8 @@
           (return-from %worker-loop))
         (cond (poll-function
                (when (eq task :timeout)
-                 (return-from %worker-loop)
-                 (poll)))
+                 (poll)
+                 (return-from %worker-loop)))
               (t
                (assert (not (eq task :timeout)))))
         (if (bulk-task-p task)
