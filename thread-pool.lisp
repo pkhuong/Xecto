@@ -31,13 +31,19 @@
 
 (in-package "WORK-QUEUE")
 
+(defconstant +max-thread-count+ 1024)
+(deftype thread-count ()
+  `(integer 1 ,+max-thread-count+))
+(deftype thread-id ()
+  `(mod ,+max-thread-count+))
+
 (defstruct (queue
             (:constructor %make-queue))
   (locks   (error "foo") :type (simple-array mutex 1)
                          :read-only t)
   (cvar    (make-waitqueue) :type waitqueue
                          :read-only t)
-  (nthread (error "foo") :type (and unsigned-byte fixnum)
+  (nthread (error "foo") :type thread-count
                          :read-only t)
   (state   (error "foo") :type cons
                          :read-only t)
@@ -45,6 +51,8 @@
   (stacks  (error "Foo") :type (simple-array work-stack:stack 1)
                          :read-only t)
   (threads (error "Foo") :type (simple-array t 1)
+                         :read-only t)
+  (randoms (error "Foo") :type (simple-array random-state 1)
                          :read-only t))
 
 (declaim (inline p))
@@ -52,21 +60,32 @@
   (queue-p x))
 
 (defun grab-task (queue stacks i)
+  (declare (type thread-id i)
+           (type simple-vector stacks))
   (let ((task (sb-queue:dequeue queue)))
     (when task
       (return-from grab-task task)))
-  (let* ((n            (length stacks))
-         (power-of-two (ash 1 (integer-length (1- n)))))
-    (dotimes (j power-of-two)
-      (let ((i (logxor i j)))
-        (when (>= i n)
-          (go skip))
-        (let ((task (or (work-stack:steal (aref stacks i))
-                        (sb-queue:dequeue queue))))
-          (when task
-            (return-from grab-task task))))
-      skip)))
+  (let* ((n      (length stacks))
+         (lb     (integer-length (1- n)))
+         (ceil   (ash 1 lb))
+         (ceil-1 (1- ceil))
+         (scaled (ceiling (ash i lb) n)))
+    (declare (type thread-count n ceil)
+             (type thread-id scaled))
+    ;; scaled is the least value such that
+    ;;  (truncate (* scaled n) ceil) = i.
+    (dotimes (j ceil)
+      (let* ((scaledp  (* n (logxor scaled j)))
+             (unscaled (ash scaledp (- lb)))
+             (r        (logand scaledp ceil-1)))
+        (when (< r n) ;; when (logxor scaled j) is the least value
+          ;; such that the truncation yields unscaled
+          (let ((task (or (work-stack:steal (aref stacks unscaled))
+                          (sb-queue:dequeue queue))))
+            (when task
+              (return-from grab-task task))))))))
 
+(declaim (type (or null thread-id) *worker-id*))
 (defvar *worker-id* nil)
 (defvar *worker-hint* 0)
 (defvar *current-queue* nil)
@@ -128,7 +147,8 @@
          (lock      (aref locks i))
          (queue     (queue-queue  wqueue))
          (stacks    (queue-stacks wqueue))
-         (stack     (aref stacks i)))
+         (stack     (aref stacks i))
+         (random    (aref (queue-randoms wqueue) i)))
     (labels ((poll ()
                (when poll-function
                  (let ((x (funcall poll-function)))
@@ -136,7 +156,7 @@
              (work ()
                (loop while (progn
                              (poll)
-                             (work-stack:run-one stack))
+                             (work-stack:run-one stack random))
                      do (when (eq (car state) :done)
                           (return-from %worker-loop)))))
       (declare (inline poll work))
@@ -204,7 +224,7 @@
          (check)))))
 
 (defun make (nthread &optional constructor &rest arguments)
-  (declare (type (and unsigned-byte fixnum) nthread)
+  (declare (type thread-count nthread)
            (dynamic-extent arguments))
   (let* ((threads (make-array nthread))
          (default-bindings (getf arguments :bindings))
@@ -219,6 +239,10 @@
                          :queue   (sb-queue:make-queue)
                          :stacks  (map-into (make-array nthread) #'work-stack:make)
                          :threads threads
+                         :randoms (let ((i 0))
+                                    (map-into (make-array nthread)
+                                              (lambda ()
+                                                (seed-random-state (incf i)))))
                          arguments)))
     (finalize wqueue (let ((cvar  (queue-cvar  wqueue))
                            (state (queue-state wqueue)))

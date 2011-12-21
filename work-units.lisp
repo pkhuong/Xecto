@@ -37,30 +37,53 @@
                        function))
          (funcall function task))))))
 
+(declaim (inline random-bit))
+(defun random-bit (state max)
+  (let ((random (logand (1- (ash 1 (integer-length max)))
+                        (random (1+ most-positive-fixnum)
+                                state))))
+    (if (zerop random)
+        0
+        (logxor random (1- random)))))
+
 (declaim (inline %bulk-find-task))
-(defun %bulk-find-task (bulk hint)
+(defun %bulk-find-task (bulk hint random)
   (declare (type fixnum hint)
-           (type (or null bulk-task) bulk))
+           (type (or null bulk-task) bulk)
+           (type random-state random))
   (when (null bulk)
     (return-from %bulk-find-task (values nil nil)))
   (let* ((subtasks (bulk-task-subtasks bulk))
          (begin    hint)
          (end      (length subtasks)))
-    (loop
-      (when (zerop (bulk-task-waiting bulk))
-        (return (values nil nil)))
-      (let ((index (position nil subtasks :start begin :end end :test-not #'eql)))
-        (cond (index
-               (setf begin (1+ index))
-               (let ((x (aref subtasks index)))
-                 (when (and x
-                            (eql (cas (svref subtasks index) x nil)
-                                 x))
-                   (atomic-decf (bulk-task-waiting bulk))
-                   (return (values x index)))))
-              ((zerop begin)
-               (return (values nil nil)))
-              (t
-               (setf begin 0
-                     end   hint)))))))
+    (flet ((acquire (index)
+             (let ((x (aref subtasks index)))
+               (when (and x
+                          (eql (cas (svref subtasks index) x nil)
+                               x))
+                 (atomic-decf (bulk-task-waiting bulk))
+                 (return-from %bulk-find-task
+                   (values x index)))))
+           (quick-check ()
+             (when (zerop (bulk-task-waiting bulk))
+               (return-from %bulk-find-task
+                 (values nil nil)))))
+      (declare (inline acquire quick-check))
+      (when (>= begin end)
+        (setf begin 0))
+      (quick-check)
+      (acquire begin)
+      (setf begin (mod (logxor begin (random-bit random end))
+                       end))
+      (loop
+        (quick-check)
+        (let ((index (position nil subtasks :start begin :end end :test-not #'eql)))
+          (cond (index
+                 (setf begin (1+ index))
+                 (acquire index))
+                ((zerop begin)
+                 (return (values nil nil)))
+                (t
+                 (setf begin 0
+                       end   hint))))))))
 

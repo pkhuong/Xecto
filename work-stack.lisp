@@ -207,14 +207,15 @@
                (setf (stack-top stack) (* major +stacklet-size+))))))))
 
 (declaim (inline bulk-find-task))
-(defun bulk-find-task (hint-and-bulk)
+(defun bulk-find-task (hint-and-bulk random-state)
   (declare (type cons hint-and-bulk))
   (destructuring-bind (hint . bulk) hint-and-bulk
     (declare (type fixnum hint)
              (type (or null bulk-task) bulk))
     (when (null bulk)
       (return-from bulk-find-task (values nil nil)))
-    (multiple-value-bind (task index) (%bulk-find-task bulk hint)
+    (multiple-value-bind (task index)
+        (%bulk-find-task bulk hint random-state)
       (cond (task
              (setf (car hint-and-bulk) index)
              (values task index))
@@ -222,14 +223,15 @@
              (setf (cdr hint-and-bulk) nil)
              (values nil nil))))))
 
-(defun run-one (stack)
+(defun run-one (stack random-state)
   (let ((task (pop-one-task stack))
         subtask subtask-index)
     (cond ((not task) nil)
           ((atom task)
            (execute-task task)
            t)
-          ((setf (values subtask subtask-index) (bulk-find-task task))
+          ((setf (values subtask subtask-index)
+                 (bulk-find-task task random-state))
            (let* ((bulk-task (cdr task))
                   (function (bulk-task-subtask-function bulk-task)))
              (declare (type bulk-task bulk-task))
@@ -252,4 +254,4 @@
                (setf (bulk-task-cleanup bulk-task) nil)))
            t)
           (t
-           (run-one stack)))))
+           (run-one stack random-state)))))
