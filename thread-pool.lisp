@@ -268,14 +268,14 @@
 (defun enqueue (task &optional (queue (current-queue)))
   (declare (type task-designator task)
            (type queue queue))
-  (assert (alive-p queue))
+  (assert (and (alive-p queue) 'enqueue))
   (sb-queue:enqueue task (queue-queue queue))
   (condition-broadcast (queue-cvar queue))
   nil)
 
 (defun enqueue-all (tasks &optional (queue (current-queue)))
   (declare (type queue queue))
-  (assert (alive-p queue))
+  (assert (and (alive-p queue) 'enqueue-all))
   (let ((queue (queue-queue queue)))
     (map nil (lambda (task)
                (sb-queue:enqueue task queue))
@@ -286,7 +286,7 @@
 (defun push-self (task &optional (queue (current-queue)))
   (declare (type queue queue)
            (type task-designator task))
-  (assert (alive-p queue))
+  (assert (and (alive-p queue) 'push-self))
   (let ((id *worker-id*))
     (cond (id
            (assert (eql (aref (queue-threads queue) id)
@@ -297,7 +297,7 @@
 
 (defun push-self-all (tasks &optional (queue (current-queue)))
   (declare (type queue queue))
-  (assert (alive-p queue))
+  (assert (and (alive-p queue) 'push-self-all))
   (let ((id *worker-id*))
     (cond (id
            (assert (eql (aref (queue-threads queue) id)

@@ -161,11 +161,13 @@
            x))))
 
 (defun push (stack x &optional (hint 0))
-  (%push stack (bulk-task-hintify x hint)))
+  (when x
+    (%push stack (bulk-task-hintify x hint))))
 
 (defun push-all (stack values &optional (hint 0))
   (map nil (lambda (x)
-             (%push stack (bulk-task-hintify x hint)))
+             (when x
+               (%push stack (bulk-task-hintify x hint))))
        values))
 
 (defun pop-one-task (stack)
@@ -213,26 +215,26 @@
     (declare (type fixnum hint)
              (type (or null bulk-task) bulk))
     (when (null bulk)
-      (return-from bulk-find-task (values nil nil)))
+      (return-from bulk-find-task (values nil nil nil)))
     (multiple-value-bind (task index)
         (%bulk-find-task bulk hint random-state)
       (cond (task
              (setf (car hint-and-bulk) index)
-             (values task index))
+             (values task index bulk))
             (t
              (setf (cdr hint-and-bulk) nil)
-             (values nil nil))))))
+             (values nil nil nil))))))
 
 (defun run-one (stack random-state)
   (let ((task (pop-one-task stack))
-        subtask subtask-index)
+        subtask subtask-index bulk-task)
     (cond ((not task) nil)
           ((atom task)
            (execute-task task)
            t)
-          ((setf (values subtask subtask-index)
+          ((setf (values subtask subtask-index bulk-task)
                  (bulk-find-task task random-state))
-           (let* ((bulk-task (cdr task))
+           (let* ((bulk-task bulk-task)
                   (function (bulk-task-subtask-function bulk-task)))
              (declare (type bulk-task bulk-task))
              (if function

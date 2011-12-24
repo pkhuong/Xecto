@@ -82,5 +82,4 @@
                                        (append cleanup (list #'future:mark-done))
                                        (list cleanup #'future:mark-done))
                         arguments)))
-    (future:mark-dependencies future)
-    (future:thaw future)))
+    (future:mark-dependencies future)))

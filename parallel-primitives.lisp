@@ -121,8 +121,6 @@
                                (call-with-future-values
                                 cleanup dependencies)))))
                  #'make-future)))
-    (work-queue:push-self future (work-queue:current-queue
-                                  parallel-future:*context*))
     future))
 
 (defun future-value (future)
@@ -174,8 +172,6 @@
            :subtask-function (lambda (subtask self index)
                                (declare (ignore subtask self))
                                (funcall function index)))))
-    (work-queue:push-self future (work-queue:current-queue
-                                  parallel-future:*context*))
     future))
 
 (defun call-n-times (count function aggregate-function &optional cleanup)

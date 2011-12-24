@@ -24,7 +24,7 @@
   (cleanup   nil                   :type (or list symbol function)))
 
 (deftype task-designator ()
-  `(or symbol function task bulk-task))
+  `(or (and symbol (not null)) function task bulk-task))
 
 (defun execute-task (task)
   (etypecase task
@@ -39,6 +39,7 @@
 
 (declaim (inline random-bit))
 (defun random-bit (state max)
+  (return-from random-bit 0)
   (let ((random (logand (1- (ash 1 (integer-length max)))
                         (random (1+ most-positive-fixnum)
                                 state))))
