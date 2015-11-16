@@ -1,7 +1,9 @@
 (asdf:defsystem "xecto"
-  :version "0.0.0"
-  :licence "BSD"
+  :version "0.0.1"
+  :licence "3-clause BSD"
+  :license "3-clause BSD"
   :description "Xecto is a simple parallel vector-processing library"
+  :author "Paul Khuong"
   :depends-on ("sb-queue")
   :components
   ((:file "status")
